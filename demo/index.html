@@ -126,6 +126,8 @@
   .form input, .form select, .form textarea, td input { border: 1px solid var(--line); border-radius: 6px; background: var(--bg); padding: 5px 7px; min-width: 0; width: 100%; }
   td input { padding: 3px 5px; }
   label.btn { display: inline-block; }
+  .next { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; background: var(--accent-soft); border: 1px solid var(--accent); border-radius: 10px; padding: 8px 12px; font-size: 13px; }
+  .next.busy { border-style: dashed; }
   .empty { color: var(--muted); font-size: 13px; padding: 8px 0; }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; scroll-behavior: auto !important; } }
 </style>
@@ -154,6 +156,7 @@
     <!-- Customer -->
     <section class="panel pin on" data-p="customer">
       <div class="stack">
+        <div class="next" id="next-c" hidden></div>
         <div class="phone">
           <div class="phone-head">
             <div class="avatar" id="biz-initial">A</div>
@@ -206,6 +209,7 @@
           <p class="muted">When an item isn't in stock, the Supplier Enquiry agent asks your suppliers. Answer here as the supplier.</p>
           <label class="muted" for="sup-pick">Supplier</label>
           <select id="sup-pick" class="btn" style="width: 100%; margin: 4px 0 8px"></select>
+          <div class="next" id="next-s" hidden style="margin-bottom: 8px"></div>
           <div class="phone" style="height: 360px">
             <div class="chat" id="sup-chat"></div>
             <form class="composer" id="sup-composer">
@@ -656,9 +660,11 @@ ${text.slice(0, 8000)}
 Reply with only JSON: {"answered": true, "quotes": [{"item_id": 1, "available": true, "unit_cost": 2.5, "note": ""}]}
 "answered" is false for messages like "ok, will check" that give no prices.`;
   const r = await askClaude("Supplier Enquiry", "json", prompt, () => ruleSupplier([...asked.values()], text));
-  if (!r || !r.answered) { log("Supplier Enquiry", `${supplier.name} hasn't given prices yet; still waiting.`); return []; }
+  const quotes = Array.isArray(r && r.quotes) ? r.quotes : [];
+  const answered = (r && r.answered === true) || quotes.some((q) => Number(q.unit_cost) > 0 || q.available === false);
+  if (!answered) { log("Supplier Enquiry", `${supplier.name} hasn't given prices yet; still waiting for them.`); return []; }
   const read = [];
-  for (const q of r.quotes || []) {
+  for (const q of quotes) {
     const item = asked.get(Number(q.item_id));
     if (!item) continue;
     if (!q.available || !(Number(q.unit_cost) > 0)) { read.push(`${item.description}: not available`); continue; }
@@ -899,6 +905,7 @@ function onSupplierMessage(supplierId, text) {
       const e = db.getEnquiry(eid);
       if (e && e.status === "waiting_supplier") await quote(e);
     }
+    if (tab === "supplier" && S.drafts.some((d) => d.status === "pending")) tab = "approvals";
   });
 }
 
@@ -1090,13 +1097,23 @@ function render() {
   put(logEl, ...(S.log.length ? S.log.map((l) => el("div", {}, el("time", {}, stamp(l.at)), el("span", { class: `who${l.agent === "Owner alert" ? " owner" : ""}` }, l.agent), el("span", {}, l.text))) : [el("p", { class: "empty" }, "Nothing yet. Each agent's work appears here.")]));
   logEl.scrollTop = logEl.scrollHeight;
 
+  // What happens next
+  for (const box of [$("#next-c"), $("#next-s")]) {
+    const n = nextStep();
+    box.hidden = !n;
+    if (!n) continue;
+    box.classList.toggle("busy", !!working);
+    put(box, el("span", {}, n.text), n.tab && n.tab !== shown && !(wide.matches && (n.tab === "customer" || n.tab === "agents")) ? el("button", { class: "btn small primary", type: "button", onclick: () => { tab = n.tab; render(); } }, n.label) : null);
+  }
+
   // Supplier
   const pick = $("#sup-pick");
   put(pick, ...S.suppliers.map((s) => el("option", { value: s.id, selected: s.id === supplierPick }, `${s.name}${db.openRequests(s.id).length ? " · waiting for your prices" : ""}`)));
   const sc = $("#sup-chat");
   const sm = S.supplierChat.filter((m) => m.supplier_id === supplierPick);
   put(sc, sm.length ? null : el("div", { class: "muted", style: "text-align:center;padding:16px" }, "No price requests yet. Ask the customer side for an item that's out of stock (e.g. 10 elbows)."),
-    ...sm.map((m) => el("div", { class: `bubble ${m.direction === "in" ? "out" : "in"}` }, m.body, el("time", {}, hhmm(m.at)))));
+    ...sm.map((m) => el("div", { class: `bubble ${m.direction === "in" ? "out" : "in"}` }, m.body, el("time", {}, hhmm(m.at)))),
+    working ? el("div", { class: "typing", style: "align-self:flex-start" }, `${working} is working…`) : null);
   sc.scrollTop = sc.scrollHeight;
   put($("#sup-tries"), ...SUPPLIER_TRIES.map((t) => el("button", { type: "button", onclick: () => sendSupplier(t) }, t)));
 
@@ -1164,6 +1181,21 @@ async function uploadExcel(file) {
   } catch (e) {
     put(status, el("div", { class: "alert" }, `Couldn't read ${file.name}: ${e.message}`));
   }
+}
+
+/** One line on what the flow is waiting for, with a button to the place where it happens. */
+function nextStep() {
+  if (working) return { text: `${working} is working…` };
+  if (S.drafts.some((d) => d.status === "pending")) return { text: "The quote is ready. It waits for your approval before the customer gets it.", tab: "approvals", label: "Open Approvals" };
+  const e = db.openEnquiry();
+  if (!e) return null;
+  if (e.status === "waiting_supplier") {
+    const names = [...new Set(db.openRequests().map((r) => S.suppliers.find((x) => x.id === r.supplier_id).name))];
+    return { text: `Waiting for prices from ${names.join(" and ")}. Reply as the supplier, or tap +24 hours to skip a slow one.`, tab: "supplier", label: "Open Supplier" };
+  }
+  if (e.status === "quoted") return { text: `Quote ${e.quote_ref} sent. Reply as the customer, or tap +24 hours to see a follow-up.`, tab: "customer", label: "Open Customer" };
+  if (e.status === "needs_human") return { text: "The agents are paused and the chat is yours. Hand it back on the Agents panel.", tab: "agents", label: "Open Agents" };
+  return null;
 }
 
 function renderSetup() {
