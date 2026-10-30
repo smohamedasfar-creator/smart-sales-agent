@@ -125,6 +125,7 @@
   .form label.check { flex-direction: row; align-items: center; gap: 8px; color: var(--text); }
   .form input, .form select, .form textarea, td input { border: 1px solid var(--line); border-radius: 6px; background: var(--bg); padding: 5px 7px; min-width: 0; width: 100%; }
   td input { padding: 3px 5px; }
+  label.btn { display: inline-block; }
   .empty { color: var(--muted); font-size: 13px; padding: 8px 0; }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; scroll-behavior: auto !important; } }
 </style>
@@ -238,7 +239,15 @@
       <div class="stack">
         <div class="card">
           <h2>Price list</h2>
-          <p class="muted">Example items standing in for your Excel sheet or Zoho. Change a price or stock and try again.</p>
+          <p class="muted">The Price &amp; Stock agent checks every item here: the name, selling price, cost and stock.</p>
+          <div class="source" id="source"></div>
+          <div class="row" style="margin: 10px 0">
+            <label class="btn primary" for="excel-file">Upload your Excel price list</label>
+            <input type="file" id="excel-file" accept=".xlsx,.xls,.csv" hidden>
+            <button class="btn" type="button" id="use-example">Use the example list</button>
+          </div>
+          <p class="muted">Columns are found by their names in the first row, as in the real app: <i>Item Code</i>, <i>Item Name</i> or <i>Description</i>, <i>Category</i>, <i>Unit</i>, <i>Selling Price</i>, <i>Cost Price</i>, <i>Stock</i> or <i>Qty</i>. Without a stock column every item counts as available. The file stays in your browser.</p>
+          <div class="alert" style="margin-bottom: 10px"><b>Zoho:</b> live stock from Zoho Books or Zoho Inventory is checked by the real app on your server, with your Zoho login. This page can't sign in to Zoho, so to test with Zoho items, export them to Excel from Zoho (Items, then Export) and upload that file here.</div>
           <div class="tablewrap"><table id="catalog"></table></div>
         </div>
         <div class="card">
@@ -254,6 +263,7 @@
   </div>
 </div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 "use strict";
 
@@ -270,6 +280,7 @@ function freshState() {
     now: START,
     nextId: 1,
     useClaude: true,
+    catalogSource: null, // null = the example list; otherwise { file, sheet }
     settings: {
       businessName: "Al Noor Building Materials",
       currency: "AED",
@@ -590,9 +601,10 @@ Return one match per item. Reply with only JSON: {"matches": [{"item_id": 1, "sk
     const inStock = product.stock === null || product.stock >= item.quantity;
     Object.assign(item, { sku: product.sku, matched_name: product.name, category: product.category, unit: item.unit || product.unit, list_price: product.price, cost: product.cost, available: inStock ? 1 : 0, source: inStock ? "stock" : null });
     if (!inStock) needSupplier.push(item);
-    notes.push(`${item.description} → ${product.sku}, ${inStock ? `in stock (${product.stock})` : `only ${product.stock} in stock, need ${item.quantity}`}`);
+    notes.push(`${item.description} → ${product.sku}, ${product.stock === null ? "available (no stock column)" : inStock ? `in stock (${product.stock})` : `only ${product.stock} in stock, need ${item.quantity}`}`);
   }
-  log("Price & Stock", notes.join("\n"));
+  const src = S.catalogSource ? `your Excel file ${S.catalogSource.file}` : "the example price list";
+  log("Price & Stock", `Checked ${src} (${S.catalog.length} items):\n${notes.join("\n")}`);
   return needSupplier;
 }
 
@@ -988,7 +1000,7 @@ const AGENTS = [
   ["Coordinator", "Reads each message and passes the work on"],
   ["WhatsApp Reception", "Writes every reply to the customer"],
   ["Requirement Gatherer", "Turns the chat into an item list"],
-  ["Price & Stock", "Matches items to the price list"],
+  ["Price & Stock", "Checks price and stock in Excel or Zoho"],
   ["Supplier Enquiry", "Asks suppliers and reads their prices"],
   ["Pricing & Margin", "Margin, rounding and VAT (plain code)"],
   ["Estimate", "Writes the quotation"],
@@ -1101,12 +1113,71 @@ function render() {
   put($("#alerts"), ...(alerts.length ? alerts.map((l) => el("div", {}, el("time", {}, stamp(l.at)), el("span", { class: "who owner" }, "Alert"), el("span", {}, l.text))) : [el("p", { class: "empty" }, "No alerts yet.")]));
 }
 
+// Excel price list (column names as in src/catalog/excel.ts)
+const CATALOG_ROWS_SHOWN = 200;
+const COLUMNS = {
+  sku: ["sku", "code", "item code", "product code", "part no", "part number", "item no"],
+  name: ["name", "item", "item name", "description", "product", "product name", "material"],
+  category: ["category", "group", "item group", "type", "brand"],
+  unit: ["unit", "uom", "units"],
+  price: ["price", "selling price", "sale price", "rate", "unit price", "sales price", "mrp"],
+  cost: ["cost", "cost price", "purchase price", "buying price", "purchase rate"],
+  stock: ["stock", "qty", "quantity", "available", "stock on hand", "in stock", "balance", "stock qty"],
+};
+const cellText = (v) => (v == null ? "" : String(v).trim());
+function cellNumber(v) {
+  const t = cellText(v).replace(/[^0-9.-]/g, "");
+  if (t === "") return null;
+  const n = Number(t);
+  return Number.isFinite(n) ? n : null;
+}
+function readPriceList(rows) {
+  const header = (rows[0] || []).map((h) => cellText(h).toLowerCase());
+  const col = {};
+  header.forEach((title, i) => {
+    for (const [field, names] of Object.entries(COLUMNS)) if (col[field] === undefined && names.includes(title)) col[field] = i;
+  });
+  if (col.name === undefined) throw new Error('No item name column found. Name a column "Item Name" or "Description" in the first row.');
+  const items = [];
+  rows.slice(1).forEach((row, n) => {
+    const read = (f) => (col[f] === undefined ? null : row[col[f]]);
+    const name = cellText(read("name"));
+    if (!name) return;
+    items.push({ sku: cellText(read("sku")) || `ROW-${n + 2}`, name, category: cellText(read("category")) || null, unit: cellText(read("unit")) || null,
+      price: cellNumber(read("price")), cost: cellNumber(read("cost")), stock: cellNumber(read("stock")) });
+  });
+  if (!items.length) throw new Error("The first sheet has no item rows under the column names.");
+  return items;
+}
+async function uploadExcel(file) {
+  const status = $("#source");
+  put(status, el("span", { class: "muted" }, `Reading ${file.name}…`));
+  try {
+    if (!window.XLSX) throw new Error("The Excel reader didn't load. Check your connection and reload the page.");
+    const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
+    const sheet = wb.SheetNames[0];
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheet], { header: 1, raw: true, defval: null });
+    S.catalog = readPriceList(rows);
+    S.catalogSource = { file: file.name, sheet: wb.SheetNames.length > 1 ? sheet : "" };
+    log("Price & Stock", `Loaded ${S.catalog.length} items from ${file.name}.`);
+    save(); renderSetup(); render();
+  } catch (e) {
+    put(status, el("div", { class: "alert" }, `Couldn't read ${file.name}: ${e.message}`));
+  }
+}
+
 function renderSetup() {
   const cat = $("#catalog");
-  const num = (obj, key, step) => el("input", { type: "number", step, min: 0, value: obj[key], onchange: (ev) => { obj[key] = Number(ev.target.value) || 0; save(); render(); } });
-  put(cat, 
+  // A blank box means "not in the list" (no price, no cost, or stock not tracked).
+  const num = (obj, key, step) => el("input", { type: "number", step, min: 0, value: obj[key], "aria-label": key, onchange: (ev) => { obj[key] = ev.target.value === "" ? null : Number(ev.target.value); save(); render(); } });
+  const shown = S.catalog.slice(0, CATALOG_ROWS_SHOWN);
+  put($("#source"), S.catalogSource
+    ? el("span", { class: "tag stock" }, `Your Excel: ${S.catalogSource.file}${S.catalogSource.sheet ? `, sheet "${S.catalogSource.sheet}"` : ""} · ${S.catalog.length} items`)
+    : el("span", { class: "tag" }, `Example list · ${S.catalog.length} items`));
+  put(cat,
     el("tr", {}, el("th", {}, "Code"), el("th", {}, "Item"), el("th", {}, "Category"), el("th", { class: "num" }, "Selling price"), el("th", { class: "num" }, "Cost"), el("th", { class: "num" }, "Stock")),
-    ...S.catalog.map((c) => el("tr", {}, el("td", {}, c.sku), el("td", {}, c.name), el("td", {}, c.category), el("td", { class: "num" }, num(c, "price", "0.01")), el("td", { class: "num" }, num(c, "cost", "0.01")), el("td", { class: "num" }, num(c, "stock", "1")))),
+    ...shown.map((c) => el("tr", {}, el("td", {}, c.sku), el("td", {}, c.name), el("td", {}, c.category || ""), el("td", { class: "num" }, num(c, "price", "0.01")), el("td", { class: "num" }, num(c, "cost", "0.01")), el("td", { class: "num" }, num(c, "stock", "1")))),
+    S.catalog.length > shown.length ? el("tr", {}, el("td", { colspan: 6, class: "muted" }, `Showing the first ${shown.length} of ${S.catalog.length} items. The agent checks all of them.`)) : null,
   );
   put($("#suppliers"), 
     el("tr", {}, el("th", {}, "Supplier"), el("th", {}, "Asked about")),
@@ -1150,6 +1221,8 @@ $("#msg").addEventListener("keydown", (ev) => { if (ev.key === "Enter" && !ev.sh
 $("#sup-composer").addEventListener("submit", (ev) => { ev.preventDefault(); const t = $("#sup-msg").value; $("#sup-msg").value = ""; sendSupplier(t); });
 $("#sup-msg").addEventListener("keydown", (ev) => { if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); $("#sup-composer").requestSubmit(); } });
 $("#sup-pick").addEventListener("change", (ev) => { supplierPick = Number(ev.target.value); render(); });
+$("#excel-file").addEventListener("change", (ev) => { const f = ev.target.files[0]; ev.target.value = ""; if (f) uploadExcel(f); });
+$("#use-example").addEventListener("click", () => { S.catalog = freshState().catalog; S.catalogSource = null; save(); renderSetup(); render(); });
 $("#plus4").addEventListener("click", () => advance(4));
 $("#plus24").addEventListener("click", () => advance(24));
 let resetArmed = false;
