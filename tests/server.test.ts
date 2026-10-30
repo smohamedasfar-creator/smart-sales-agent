@@ -1,0 +1,97 @@
+import { createHmac } from "node:crypto";
+import type { AddressInfo } from "node:net";
+import { afterEach, describe, expect, it } from "vitest";
+import { parseWebhook } from "../src/channels/whatsapp.js";
+import { createApp } from "../src/server.js";
+import { setup } from "./helpers.js";
+
+const SECRET = "app-secret";
+const servers: { close: () => void }[] = [];
+afterEach(() => servers.splice(0).forEach((s) => s.close()));
+
+async function start() {
+  const t = setup();
+  const app = createApp(t.coordinator, {
+    dashboardPassword: "pw",
+    whatsapp: { ...t.ctx.config.whatsapp, appSecret: SECRET, verifyToken: "verify-me" },
+  });
+  const server = app.listen(0);
+  servers.push(server);
+  await new Promise((resolve) => server.once("listening", resolve));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  return { t, base };
+}
+
+function webhookBody(text: string) {
+  return {
+    entry: [
+      {
+        changes: [
+          {
+            value: {
+              contacts: [{ wa_id: "971501111111", profile: { name: "Ali" } }],
+              messages: [{ id: "wamid.1", from: "971501111111", type: "text", text: { body: text } }],
+            },
+          },
+        ],
+      },
+    ],
+  };
+}
+
+describe("WhatsApp webhook", () => {
+  it("answers Meta's verification only with the right token", async () => {
+    const { base } = await start();
+    const ok = await fetch(`${base}/webhook/whatsapp?hub.mode=subscribe&hub.verify_token=verify-me&hub.challenge=123`);
+    expect(await ok.text()).toBe("123");
+    const bad = await fetch(`${base}/webhook/whatsapp?hub.mode=subscribe&hub.verify_token=wrong&hub.challenge=123`);
+    expect(bad.status).toBe(403);
+  });
+
+  it("rejects calls without a valid signature and handles signed ones", async () => {
+    const { t, base } = await start();
+    t.llm.handlers.coordinator = () => ({ intent: "other" });
+    const body = JSON.stringify(webhookBody("hello"));
+
+    const unsigned = await fetch(`${base}/webhook/whatsapp`, { method: "POST", headers: { "Content-Type": "application/json" }, body });
+    expect(unsigned.status).toBe(401);
+
+    const signature = `sha256=${createHmac("sha256", SECRET).update(body).digest("hex")}`;
+    const signed = await fetch(`${base}/webhook/whatsapp`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Hub-Signature-256": signature },
+      body,
+    });
+    expect(signed.status).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(t.db.recentMessages(1).map((m) => m.body)).toEqual(["hello", "reply for: Reply naturally. If they have not asked for anything yet, ask which products they need a price for."]);
+  });
+
+  it("reads button replies and photos with captions", () => {
+    const body = webhookBody("x");
+    body.entry[0].changes[0].value.messages = [
+      { id: "a", from: "1", type: "button", button: { text: "Yes" } },
+      { id: "b", from: "1", type: "image", image: { caption: "this size" } },
+    ] as never;
+    expect(parseWebhook(body).map((m) => m.text)).toEqual(["Yes", "[photo] this size"]);
+  });
+});
+
+describe("dashboard", () => {
+  it("needs the password", async () => {
+    const { base } = await start();
+    expect((await fetch(`${base}/api/settings`)).status).toBe(401);
+    const auth = { Authorization: `Basic ${Buffer.from("owner:pw").toString("base64")}` };
+    const response = await fetch(`${base}/api/settings`, { headers: auth });
+    expect(response.status).toBe(200);
+    expect((await response.json()).margin.defaultPercent).toBe(15);
+  });
+
+  it("saves margin settings without losing the other margin fields", async () => {
+    const { base } = await start();
+    const headers = { Authorization: `Basic ${Buffer.from("owner:pw").toString("base64")}`, "Content-Type": "application/json" };
+    await fetch(`${base}/api/settings`, { method: "PUT", headers, body: JSON.stringify({ margin: { defaultPercent: 22 } }) });
+    const saved = await (await fetch(`${base}/api/settings`, { headers })).json();
+    expect(saved.margin).toMatchObject({ defaultPercent: 22, priceBasis: "list" });
+  });
+});
