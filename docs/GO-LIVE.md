@@ -1,0 +1,78 @@
+# Going live: step by step
+
+About an hour, done together. Keep **your phone with the WhatsApp Business app** next to you: Meta sends codes to it
+and you scan a QR code with it.
+
+## Before we start (5 minutes)
+
+- [ ] Update the **WhatsApp Business app** on your phone to the latest version.
+- [ ] Open **business.facebook.com** in your browser and check you can see your business (Meta Business account).
+- [ ] Have a **payment card** ready: the server (about USD 5 a month), Claude usage, and possibly the Meta partner.
+- [ ] Decide which number gets **owner alerts** (new quotes to approve, orders, new customers). With your business
+      number shared with the app, alerts can't go to that same number: use your personal WhatsApp number, or leave it
+      empty and check the dashboard.
+
+## 1. Claude key (5 minutes)
+
+1. Go to **console.anthropic.com**, sign in, add a payment method and some credit (Billing).
+2. **Settings → API keys → Create key**. Copy it; we put it on the server in step 2.
+
+## 2. The server (15 minutes)
+
+The app runs on a server that is on day and night, with an https address. **Railway** (railway.com) is the simplest:
+
+1. Sign in to Railway with your GitHub account, **New project → Deploy from GitHub repo → smart-sales-agent**.
+   (I'll first move the work onto the repo's main branch, or we pick the branch `claude/sweet-noether-5qzf4e`.)
+2. **Add a volume** mounted at `/app/data` (it keeps the database and your price list).
+3. **Variables**: `DASHBOARD_PASSWORD` (a strong password of your own), `ANTHROPIC_API_KEY` (step 1),
+   `PUBLIC_URL` (the address Railway gives, under Settings → Networking → Generate domain), `OWNER_PHONE`
+   (see above, country code and no +). The WhatsApp values come in step 4.
+4. Open the address, log in with any user name and your password. **Settings → Price list → Upload** your stock list.
+5. In **Test chat**, write as a customer ("Hi, I need 10 UGREEN HDMI cable"). The agents answer in Enquiries, and
+   the quote waits in Approvals. Nothing goes to WhatsApp yet.
+
+## 3. Choose a Meta partner (10 minutes)
+
+Your existing number is connected through a Meta partner's sign-up screen ("Coexistence"). Ask the partner:
+
+- Do you support **Coexistence** (keep the WhatsApp Business app on the same number)?
+- Does the WhatsApp account stay in **my own Meta Business account**?
+- Can I create a **permanent access token** (System User) to use the Cloud API from my own app?
+
+All three must be yes. Note their monthly fee, if any.
+
+## 4. Connect your number (20 minutes)
+
+1. Start the partner's **Embedded Signup**: log in with Facebook, pick your business, choose
+   **"Connect existing WhatsApp Business app"**, and **scan the QR code** with the WhatsApp Business app on your phone.
+   Allow chat history to be shared if you want older chats in the app's records.
+2. In **developers.facebook.com → your app → WhatsApp → API setup**, copy the **Phone number ID**.
+3. In **business.facebook.com → Settings → System users**, create a system user with access to the WhatsApp account
+   and generate a **permanent token** with `whatsapp_business_messaging` and `whatsapp_business_management`.
+4. In **App settings → Basic**, copy the **App secret**.
+5. On Railway, add `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_APP_SECRET`, and a
+   `WHATSAPP_VERIFY_TOKEN` you make up (any word). The app restarts.
+6. In the Meta app, **WhatsApp → Configuration → Webhook**: the URL is shown in the dashboard's
+   **Settings → Connections** (`https://…/webhook/whatsapp`); type the same verify token; **Verify and save**.
+   Then **subscribe** to `messages` and `smb_message_echoes`.
+
+## 5. First real test (10 minutes)
+
+1. From another phone, send your business number a price request.
+2. Check the dashboard: the enquiry appears, the agents reply, the quote waits in **Approvals**.
+3. Reply once yourself from the WhatsApp Business app: the agents should step back in that chat
+   (Enquiries → "Let the agents continue" hands it back).
+
+## 6. Your settings (whenever you like)
+
+- **Settings**: your TRN, VAT 5%, margins, customer levels and per-category percentages, first-order offer,
+  personal contacts (family and friends), tone of replies, business information (address, delivery, payment terms).
+- **Suppliers**: each supplier with its WhatsApp number or email and the **brands** it sells.
+- Keep **"Quotes wait for my approval"** on for the first weeks.
+
+## Later
+
+- **Message templates** (WhatsApp Manager): needed for follow-ups and supplier requests more than 24 hours after the
+  person's last message. Approval by Meta can take a day; the README has the wording.
+- **Zoho**: when you want live stock and estimates in Zoho, the Connections card lists the keys.
+- Open the WhatsApp Business app **at least every 14 days**, or Meta disconnects the number from the agents.
