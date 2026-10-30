@@ -149,6 +149,7 @@
     <button data-p="agents" class="pinned">Agents</button>
     <button data-p="supplier">Supplier <span class="count" id="sup-count" hidden></span></button>
     <button data-p="approvals">Approvals <span class="count" id="appr-count" hidden></span></button>
+    <button data-p="brands">Brands &amp; orders</button>
     <button data-p="setup">Price list &amp; settings</button>
   </nav>
 
@@ -171,10 +172,10 @@
         <div class="card">
           <h3>How to try it</h3>
           <ol class="muted" style="margin: 0 0 10px; padding-left: 18px; font-size: 13px">
-            <li>Send the first example. The pipes are in stock; the elbows aren't, so a supplier is asked.</li>
-            <li>Open <b>Supplier</b> and send a price as Gulf Pipes Trading.</li>
+            <li>Send the first example. It has two brands, so the Cosmoplast agent and the Pegler agent each take their items. The elbows and ball valves aren't in stock, so each brand agent asks its own supplier.</li>
+            <li>Open <b>Supplier</b> and send a price as Gulf Pipes Trading (elbow), then as Emirates Valves (ball valve).</li>
             <li>Open <b>Approvals</b>, check the quote and send it.</li>
-            <li>Tap <b>+24 hours</b> to see a follow-up, then reply "Yes" as the customer.</li>
+            <li>Tap <b>+24 hours</b> to see a follow-up, then reply "Yes" as the customer. The order is split by brand: see <b>Brands</b>.</li>
           </ol>
           <div class="tries" id="tries"></div>
         </div>
@@ -187,6 +188,8 @@
         <div class="card">
           <h3>The agents</h3>
           <div class="agents" id="agents"></div>
+          <h3 style="margin-top: 12px">Brand agents</h3>
+          <div class="agents" id="brand-agents"></div>
         </div>
         <div class="card">
           <div class="row" style="justify-content: space-between"><h3>Current enquiry</h3><span class="muted" id="enq-ref"></span></div>
@@ -238,6 +241,25 @@
       </div>
     </section>
 
+    <!-- Brands -->
+    <section class="panel" data-p="brands">
+      <div class="stack">
+        <div class="card">
+          <h2>Brands</h2>
+          <p class="muted">Each brand has its own agent. It takes that brand's items in every enquiry, asks that brand's suppliers, uses that brand's margin and keeps that brand's orders.</p>
+          <div class="tablewrap"><table id="brand-table"></table></div>
+        </div>
+        <div class="card">
+          <div class="row" style="justify-content: space-between">
+            <h2 style="margin: 0">Orders by brand</h2>
+            <select id="order-brand" class="btn small" aria-label="Show orders for"></select>
+          </div>
+          <p class="muted" style="margin-top: 6px">When a customer says yes, the quote becomes one order per brand.</p>
+          <div class="tablewrap"><table id="orders"></table></div>
+        </div>
+      </div>
+    </section>
+
     <!-- Setup -->
     <section class="panel" data-p="setup">
       <div class="stack">
@@ -250,12 +272,21 @@
             <input type="file" id="excel-file" accept=".xlsx,.xls,.csv" hidden>
             <button class="btn" type="button" id="use-example">Use the example list</button>
           </div>
-          <p class="muted">Columns are found by their names in the first row, as in the real app: <i>Item Code</i>, <i>Item Name</i> or <i>Description</i>, <i>Category</i>, <i>Unit</i>, <i>Selling Price</i>, <i>Cost Price</i>, <i>Stock</i> or <i>Qty</i>. Without a stock column every item counts as available. The file stays in your browser.</p>
+          <p class="muted">Columns are found by their names in the first row, as in the real app: <i>SKU</i> or <i>Part Number</i>, <i>Name</i> or <i>Description</i>, <i>Brand</i>, <i>Category</i>, <i>UOM</i>, <i>Customer Price</i>, <i>Reseller Price</i>, <i>Cost Price</i> or <i>Last Purchase</i>, <i>Qty</i> or <i>Available Qty</i>. Every sheet is read; a sheet without a Brand column takes its brand from the sheet name. Without a stock column every item counts as available. The file stays in your browser.</p>
           <div class="alert" style="margin-bottom: 10px"><b>Zoho:</b> live stock from Zoho Books or Zoho Inventory is checked by the real app on your server, with your Zoho login. This page can't sign in to Zoho, so to test with Zoho items, export them to Excel from Zoho (Items, then Export) and upload that file here.</div>
+          <div id="catalog-notes"></div>
           <div class="tablewrap"><table id="catalog"></table></div>
         </div>
         <div class="card">
           <h2>Suppliers</h2>
+          <p class="muted">Write the brands each supplier sells, separated by commas. A supplier with no brands is asked about any brand that has no supplier of its own.</p>
+          <div class="row" style="margin: 8px 0">
+            <button class="btn" type="button" id="add-supplier">Add supplier</button>
+            <label class="btn" for="supplier-file">Upload supplier list (Excel)</label>
+            <input type="file" id="supplier-file" accept=".xlsx,.xls,.csv" hidden>
+          </div>
+          <p class="muted">Excel columns: <i>Supplier</i> or <i>Name</i>, <i>Phone</i> or <i>WhatsApp</i>, <i>Email</i>, <i>Brands</i>, <i>Categories</i>.</p>
+          <div id="supplier-status"></div>
           <div class="tablewrap"><table id="suppliers"></table></div>
         </div>
         <div class="card">
@@ -280,17 +311,17 @@ const START = (() => { const d = new Date(); d.setHours(9, 0, 0, 0); return d.ge
 
 function freshState() {
   return {
-    v: 1,
+    v: 2,
     now: START,
-    nextId: 1,
+    nextId: 100, // above the example suppliers' ids
     useClaude: true,
     catalogSource: null, // null = the example list; otherwise { file, sheet }
     settings: {
-      businessName: "Al Noor Building Materials",
+      businessName: "Al Noor Trading",
       currency: "AED",
-      tone: "Friendly, short and professional. Use simple English.",
+      tone: "Polite, warm and professional, like an experienced senior sales and customer service executive. Greet the customer by name, thank them, and use simple, clear English.",
       requireApproval: true,
-      margin: { priceBasis: "list", defaultPercent: 15, byCategory: {}, byCustomer: {}, roundTo: 0 },
+      margin: { priceBasis: "list", defaultPercent: 15, byBrand: { Pegler: 20 }, byCategory: {}, byCustomer: {}, roundTo: 0 },
       taxPercent: 5,
       quoteValidityDays: 7,
       followupHours: [24, 72],
@@ -298,17 +329,23 @@ function freshState() {
       supplierGiveUpHours: 24,
     },
     catalog: [
-      { sku: "PVC-110", name: 'PVC Pipe 4" (110mm) 6m', category: "Pipes", unit: "pcs", price: 12.5, cost: 9, stock: 200 },
-      { sku: "PVC-160", name: 'PVC Pipe 6" (160mm) 6m', category: "Pipes", unit: "pcs", price: 24, cost: 18, stock: 40 },
-      { sku: "ELB-110", name: 'PVC Elbow 4" 90 degree', category: "Fittings", unit: "pcs", price: 3.2, cost: 2.1, stock: 5 },
-      { sku: "TEE-110", name: 'PVC Tee 4"', category: "Fittings", unit: "pcs", price: 4.1, cost: 2.8, stock: 100 },
-      { sku: "GV-050", name: 'Gate Valve Brass 2"', category: "Valves", unit: "pcs", price: 65, cost: 48, stock: 12 },
+      { sku: "COS-P110", name: 'PVC Pipe 4" (110mm) 6m', brand: "Cosmoplast", category: "Pipes", unit: "pcs", price: 12.5, cost: 9, stock: 200 },
+      { sku: "COS-P160", name: 'PVC Pipe 6" (160mm) 6m', brand: "Cosmoplast", category: "Pipes", unit: "pcs", price: 24, cost: 18, stock: 40 },
+      { sku: "COS-E110", name: 'PVC Elbow 4" 90 degree', brand: "Cosmoplast", category: "Fittings", unit: "pcs", price: 3.2, cost: 2.1, stock: 5 },
+      { sku: "COS-T110", name: 'PVC Tee 4"', brand: "Cosmoplast", category: "Fittings", unit: "pcs", price: 4.1, cost: 2.8, stock: 100 },
+      { sku: "HEP-D110", name: 'uPVC Drainage Pipe 4" 3m', brand: "Hepworth", category: "Pipes", unit: "pcs", price: 18.5, cost: 13, stock: 60 },
+      { sku: "PEG-GV050", name: 'Gate Valve Brass 2"', brand: "Pegler", category: "Valves", unit: "pcs", price: 65, cost: 48, stock: 12 },
+      { sku: "PEG-BV025", name: 'Ball Valve Brass 1"', brand: "Pegler", category: "Valves", unit: "pcs", price: 28, cost: 19, stock: 0 },
     ],
+    // A supplier with brands is asked only about those brands; one with no brands is the fallback for any brand.
     suppliers: [
-      { id: 1, name: "Gulf Pipes Trading", categories: "Pipes, Fittings", last_inbound_at: null },
-      { id: 2, name: "Emirates Valves LLC", categories: "Valves", last_inbound_at: null },
+      { id: 1, name: "Gulf Pipes Trading", phone: "971502220001", brands: "Cosmoplast, Hepworth", categories: "", last_inbound_at: null },
+      { id: 2, name: "Emirates Valves LLC", phone: "971502220002", brands: "Pegler", categories: "", last_inbound_at: null },
+      { id: 3, name: "Al Madina Hardware", phone: "971502220003", brands: "", categories: "", last_inbound_at: null },
     ],
-    customer: { id: 1, phone: "971501234567", name: "Rashid", last_inbound_at: null },
+    orders: [],
+    customer: { id: 1, phone: "971501234567", name: "Rashid", type: "customer", last_inbound_at: null },
+    catalogNotes: "",
     messages: [],
     enquiries: [],
     items: [],
@@ -321,7 +358,7 @@ function freshState() {
 
 let S = load() || freshState();
 function load() {
-  try { const s = JSON.parse(localStorage.getItem("ssa-demo") || "null"); return s && s.v === 1 ? s : null; } catch { return null; }
+  try { const s = JSON.parse(localStorage.getItem("ssa-demo") || "null"); return s && s.v === 2 ? s : null; } catch { return null; }
 }
 function save() { try { localStorage.setItem("ssa-demo", JSON.stringify(S)); } catch {} }
 const id = () => S.nextId++;
@@ -349,7 +386,7 @@ const db = {
   getItem: (iid) => S.items.find((i) => i.id === iid),
   replaceItems(eid, list) {
     S.items = S.items.filter((i) => i.enquiry_id !== eid);
-    for (const it of list) S.items.push({ id: id(), enquiry_id: eid, ...it, sku: null, matched_name: null, category: null, list_price: null, cost: null, available: 0, source: null, supplier_id: null });
+    for (const it of list) S.items.push({ id: id(), enquiry_id: eid, ...it, brand: null, sku: null, matched_name: null, category: null, list_price: null, cost: null, available: 0, source: null, supplier_id: null });
   },
   addOut(eid, body) { S.messages.push({ id: id(), direction: "out", body, at: iso(), enquiry_id: eid ?? null }); },
   nextQuoteNumber: () => `Q-${String(S.enquiries.filter((e) => e.quote_ref).length + 1).padStart(5, "0")}`,
@@ -357,6 +394,24 @@ const db = {
 };
 
 function log(agent, text) { S.log.push({ at: S.now, agent, text }); }
+const splitList = (text) => String(text || "").split(",").map((x) => x.trim()).filter(Boolean);
+const NO_BRAND = "No brand";
+const brandOf = (item) => item.brand || NO_BRAND;
+const brandAgent = (brand) => `${brand} agent`;
+const supName = (sid) => (S.suppliers.find((x) => x.id === sid) || { name: "a removed supplier" }).name;
+/** Every brand in the price list, A to Z. */
+function allBrands() {
+  const set = new Set(S.catalog.map((c) => c.brand).filter(Boolean));
+  for (const sup of S.suppliers) for (const b of splitList(sup.brands)) set.add(b);
+  const list = [...set].sort((a, b) => a.localeCompare(b));
+  if (S.catalog.some((c) => !c.brand) || S.items.some((i) => !i.brand && i.sku)) list.push(NO_BRAND);
+  return list;
+}
+/** The brand the customer named in a description, if it is one of ours. */
+function brandIn(text) {
+  const words = ` ${normalize(text).join(" ")} `;
+  return allBrands().filter((b) => b !== NO_BRAND).find((b) => words.includes(` ${normalize(b).join(" ")} `)) || null;
+}
 
 // ---------------------------------------------------------------------------
 // Claude, through the page's "ask Claude" capability; simple rules when it is not available
@@ -415,7 +470,7 @@ function normalize(text) {
   return v.replace(/[^a-z0-9./]+/g, " ").split(" ").filter((t) => t.length > 0);
 }
 function score(q, item) {
-  const hay = normalize(`${item.name} ${item.sku} ${item.category || ""}`);
+  const hay = normalize(`${item.name} ${item.sku} ${item.brand || ""} ${item.category || ""}`);
   let total = 0;
   for (const t of q) {
     const numeric = /\d/.test(t);
@@ -435,9 +490,11 @@ function searchCatalog(description, limit = 8) {
 // ---------------------------------------------------------------------------
 
 const round2 = (v) => Math.round(Number((v * 100).toPrecision(12))) / 100;
-function marginPercent(category) {
+function marginPercent(item) {
   const m = S.settings.margin;
+  const category = item.category;
   if (S.customer.phone in m.byCustomer) return m.byCustomer[S.customer.phone];
+  if (item.brand && m.byBrand && m.byBrand[item.brand] != null) return m.byBrand[item.brand];
   if (category) { const k = Object.keys(m.byCategory).find((n) => n.toLowerCase() === category.toLowerCase()); if (k) return m.byCategory[k]; }
   return m.defaultPercent;
 }
@@ -445,9 +502,11 @@ function roundUp(v, step) { return step <= 0 ? round2(v) : round2(Math.ceil(v / 
 function unitPrice(item) {
   const m = S.settings.margin;
   if (item.available !== 1) return null;
-  if (item.source === "stock" && m.priceBasis === "list" && item.list_price > 0) return round2(item.list_price);
-  if (item.cost > 0) return roundUp(item.cost * (1 + marginPercent(item.category) / 100), m.roundTo);
-  if (item.list_price > 0) return round2(item.list_price);
+  // Resellers get the reseller price, end customers the customer price; each falls back to the other.
+  const list = S.customer.type === "reseller" ? (item.reseller_price || item.list_price) : (item.list_price || item.reseller_price);
+  if (item.source === "stock" && m.priceBasis === "list" && list > 0) return round2(list);
+  if (item.cost > 0) return roundUp(item.cost * (1 + marginPercent(item) / 100), m.roundTo);
+  if (list > 0) return round2(list);
   return null;
 }
 function priceItems(items) {
@@ -455,7 +514,7 @@ function priceItems(items) {
   for (const item of items) {
     const p = unitPrice(item);
     if (p === null) { unavailable.push(item); continue; }
-    lines.push({ itemId: item.id, name: item.matched_name || item.description, quantity: item.quantity, unit: item.unit, unitPrice: p, lineTotal: round2(p * item.quantity) });
+    lines.push({ itemId: item.id, brand: brandOf(item), sku: item.sku, name: item.matched_name || item.description, quantity: item.quantity, unit: item.unit, unitPrice: p, lineTotal: round2(p * item.quantity) });
   }
   const subtotal = round2(lines.reduce((s, l) => s + l.lineTotal, 0));
   const tax = round2((subtotal * S.settings.taxPercent) / 100);
@@ -468,6 +527,8 @@ function priceItems(items) {
 
 let working = null;
 function busy(agent) { working = agent; render(); }
+/** A short beat so you can see each agent take its turn. */
+const pause = () => new Promise((r) => setTimeout(r, 350));
 
 // Coordinator: what does the customer want?
 async function classify(enquiry) {
@@ -527,20 +588,78 @@ Use quantity 0 when it is not given yet.`;
   const items = (Array.isArray(r && r.items) ? r.items : [])
     .map((i) => ({ description: String(i.description || "").trim(), quantity: Number(i.quantity) || 0, unit: i.unit ? String(i.unit) : null }))
     .filter((i) => i.description);
-  db.replaceItems(enquiry.id, items);
   const questions = Array.isArray(r && r.missing_questions) ? r.missing_questions.map(String).filter(Boolean) : [];
+  questions.push(...(await whichOne(items, msgs)));
+  db.replaceItems(enquiry.id, items);
   if (items.some((i) => i.quantity <= 0) && questions.length === 0) questions.push("How many of each item do you need?");
   log("Requirement Gatherer", items.length
     ? `Items: ${items.map((i) => `${i.quantity || "?"} ${i.unit || ""} ${i.description}`.replace(/\s+/g, " ")).join("; ")}${questions.length ? `\nStill to ask: ${questions.join(" ")}` : ""}`
     : "No products asked for yet.");
   return { items, questions };
 }
+/** Products from the stock list that fit an item about equally well, with the customer's brand if they named one. */
+function closeMatches(description) {
+  const brand = brandIn(description);
+  const list = searchCatalog(description, 12).filter((c) => !brand || c.brand === brand);
+  if (list.length < 2) return list;
+  // Same kind of product first: the customer's words (not sizes) must match as well as the best match's do.
+  const q = normalize(description);
+  const words = q.filter((t) => !/\d/.test(t));
+  const bestWords = Math.max(...list.map((c) => score(words, c)));
+  const kind = list.filter((c) => score(words, c) >= Math.max(1, bestWords - 1));
+  const best = Math.max(...kind.map((c) => score(q, c)));
+  return kind.filter((c) => score(q, c) >= best - 1);
+}
+/** The words that tell close products apart, e.g. "1M", "2M", "3M" for HDMI cables. */
+function differences(products) {
+  const sets = products.map((p) => p.name.toUpperCase().split(/\s+/));
+  const common = sets[0].filter((w) => sets.every((x) => x.includes(w)));
+  return products.map((p, n) => sets[n].filter((w) => !common.includes(w)).join(" ").replace(/[\s,;(]+$/, "") || p.sku);
+}
+/** Asks which product the customer means when their words fit several in the stock list. */
+async function whichOne(items, msgs) {
+  const open = items.map((it, n) => ({ n, it, options: closeMatches(it.description) })).filter((x) => x.options.length > 1);
+  if (!open.length) return [];
+  const listing = open.map((x) => `Request ${x.n}: ${x.it.quantity || "?"} ${x.it.unit || ""} ${x.it.description}\n  Closest products in our stock list:\n${x.options.slice(0, 10).map((c) => `    - ${c.name} | brand: ${c.brand || "none"} | ${c.category || ""} | stock: ${c.stock ?? "not tracked"}`).join("\n")}`).join("\n\n");
+  const prompt = `You are the Requirement Gatherer for a trading company. You know our stock list well.
+For each request below you get the closest products from our stock list.
+Decide whether the customer's words (in the conversation) already point to exactly one product.
+- If they do, ask nothing about that request.
+- If several products fit and they differ in a way that matters (length, connector, fibre type, speed, number of ports, PoE, power, size, colour, brand), write ONE short, polite question that offers the choices as a numbered list using only the differences (e.g. "1) 1m  2) 2m  3) 3m"), at most 6 choices, in-stock ones first.
+${UNTRUSTED_NOTE}
+
+${transcript(msgs)}
+
+<requests>
+${listing}
+</requests>
+
+Reply with only JSON: {"questions": ["question"]}`;
+  const r = await askClaude("Requirement Gatherer", "json", prompt, () => ({
+    questions: open.map((x) => {
+      const opts = [...x.options].sort((a, b) => (b.stock > 0) - (a.stock > 0)).slice(0, 6);
+      const labels = differences(opts);
+      const question = `Which ${x.it.description} would you like?`;
+      // Already asked: take the customer's numbered answer, or leave the choice to the Price & Stock agent.
+      const askedAt = msgs.findIndex((m) => m.direction === "out" && m.body.includes(question));
+      if (askedAt >= 0) {
+        const answer = msgs.slice(askedAt + 1).find((m) => m.direction === "in");
+        const k = answer && Number((answer.body.match(/\b(\d)\b/) || [])[1]);
+        if (k >= 1 && k <= opts.length) x.it.description = opts[k - 1].name;
+        return null;
+      }
+      return `${question}\n${labels.map((l, i) => `${i + 1}) ${l}${opts[i].stock === 0 ? " (on order)" : ""}`).join("\n")}`;
+    }).filter(Boolean).slice(0, 1), // one choice at a time, so a single-number answer is clear
+  }));
+  return Array.isArray(r && r.questions) ? r.questions.map(String).filter(Boolean) : [];
+}
+
 function ruleGather(msgs) {
   const items = [];
   const text = msgs.filter((m) => m.direction === "in").map((m) => m.body).join("\n");
   for (let seg of text.split(/,|;|\n|\band\b|\balso\b|\+/i)) {
     seg = seg.replace(/\b(hi|hello|salam|please|pls|i need|need|price for|prices for|quote for|send|for|add|can you|give me|what is the|the)\b/gi, " ").trim();
-    if (!seg) continue;
+    if (!/[a-z]{3,}/i.test(seg)) continue; // "2" or "ok" answers a question; it isn't a product
     const m = seg.match(/^(\d+(?:\.\d+)?)\s*(pcs|pieces|piece|nos|no\.?|units?|m|metres?|meters?|kg|box(?:es)?)?\s+(?:of\s+|x\s+)?(.+)$/i);
     const desc = (m ? m[3] : seg).trim();
     if (!searchCatalog(desc).length && !m) continue;
@@ -548,15 +667,8 @@ function ruleGather(msgs) {
     const same = items.findIndex((x) => searchCatalog(x.description)[0] && searchCatalog(x.description)[0] === searchCatalog(desc)[0] && sizeOf(x.description) === sizeOf(desc));
     if (same >= 0) items[same] = { ...items[same], quantity: item.quantity || items[same].quantity }; else items.push(item);
   }
-  const questions = [];
-  for (const i of items) {
-    // A product that comes in several sizes needs one: 'PVC Pipe 4"' and 'PVC Pipe 6"' share "PVC Pipe".
-    const top = searchCatalog(i.description)[0];
-    const family = top ? top.name.split(" ").slice(0, 2).join(" ") : "";
-    const sizes = family ? S.catalog.filter((c) => c.name.startsWith(family)) : [];
-    if (!/\d/.test(i.description) && sizes.length > 1) questions.push(`Which size of ${i.description} do you need?`);
-    if (i.quantity <= 0) questions.push(`How many ${i.description} do you need?`);
-  }
+  // Which size or model is asked by whichOne(), from the stock list.
+  const questions = items.filter((i) => i.quantity <= 0).map((i) => `How many ${i.description} do you need?`);
   return { items, missing_questions: questions };
 }
 const sizeOf = (d) => (normalize(d).find((t) => /\d/.test(t)) || "");
@@ -565,16 +677,18 @@ const sizeOf = (d) => (normalize(d).find((t) => /\d/.test(t)) || "");
 async function checkPrices(enquiry) {
   busy("Price & Stock");
   const items = db.items(enquiry.id);
-  const candidates = new Map(items.map((i) => [i.id, searchCatalog(i.description)]));
+  // A brand the customer named narrows the candidates to that brand.
+  const asked = new Map(items.map((i) => [i.id, brandIn(i.description)]));
+  const candidates = new Map(items.map((i) => [i.id, searchCatalog(i.description).filter((c) => !asked.get(i.id) || c.brand === asked.get(i.id))]));
   const withC = items.filter((i) => candidates.get(i.id).length);
   const chosen = new Map();
   if (withC.length) {
-    const listing = withC.map((i) => `Item ${i.id}: ${i.quantity} ${i.unit || ""} ${i.description}\n  Candidates:\n${candidates.get(i.id).map((c) => `    - sku: ${c.sku} | ${c.name} | unit: ${c.unit} | ${c.category}`).join("\n")}`).join("\n\n");
+    const listing = withC.map((i) => `Item ${i.id}: ${i.quantity} ${i.unit || ""} ${i.description}\n  Candidates:\n${candidates.get(i.id).map((c) => `    - sku: ${c.sku} | ${c.name} | brand: ${c.brand || "none"} | unit: ${c.unit} | ${c.category} | stock: ${c.stock ?? "not tracked"}`).join("\n")}`).join("\n\n");
     const prompt = `You are the Price & Stock checker for a trading company.
 For each requested item you get a few candidate products from our price list.
 Pick the candidate that is the same product: same type and the same size, grade or specification.
 If the customer's size or specification differs from every candidate, answer null; a wrong match leads to a wrong quote.
-If the customer gave no brand, any brand of the right product matches.
+If the customer named a brand, only that brand matches. If they gave no brand, any brand of the right product matches; prefer one with enough stock.
 
 <requested_items>
 ${listing}
@@ -583,7 +697,9 @@ ${listing}
 Return one match per item. Reply with only JSON: {"matches": [{"item_id": 1, "sku": "SKU or null"}]}`;
     const r = await askClaude("Price & Stock", "json", prompt, () => ({
       matches: withC.map((i) => {
-        const top = candidates.get(i.id)[0];
+        const list = candidates.get(i.id);
+        const best = score(normalize(i.description), list[0]);
+        const top = list.filter((c) => score(normalize(i.description), c) === best).sort((a, b) => (b.stock ?? 1e9) - (a.stock ?? 1e9))[0];
         const size = sizeOf(i.description);
         const ok = top && (!size || normalize(top.name).includes(size));
         return { item_id: i.id, sku: ok ? top.sku : null };
@@ -597,15 +713,15 @@ Return one match per item. Reply with only JSON: {"matches": [{"item_id": 1, "sk
     const sku = chosen.get(item.id) || null;
     const product = sku ? candidates.get(item.id).find((c) => c.sku === sku) : undefined;
     if (!product) {
-      Object.assign(item, { sku: null, matched_name: null, source: null, available: 0 });
+      Object.assign(item, { sku: null, matched_name: null, source: null, available: 0, brand: asked.get(item.id) });
       needSupplier.push(item);
-      notes.push(`${item.description}: not in the price list`);
+      notes.push(`${item.description}: not in the price list${item.brand ? ` (${item.brand})` : ""}`);
       continue;
     }
     const inStock = product.stock === null || product.stock >= item.quantity;
-    Object.assign(item, { sku: product.sku, matched_name: product.name, category: product.category, unit: item.unit || product.unit, list_price: product.price, cost: product.cost, available: inStock ? 1 : 0, source: inStock ? "stock" : null });
+    Object.assign(item, { sku: product.sku, matched_name: product.name, brand: product.brand || null, category: product.category, unit: item.unit || product.unit, list_price: product.price, reseller_price: product.resellerPrice ?? null, cost: product.cost, available: inStock ? 1 : 0, source: inStock ? "stock" : null });
     if (!inStock) needSupplier.push(item);
-    notes.push(`${item.description} → ${product.sku}, ${product.stock === null ? "available (no stock column)" : inStock ? `in stock (${product.stock})` : `only ${product.stock} in stock, need ${item.quantity}`}`);
+    notes.push(`${item.description} → ${product.sku} (${brandOf(item)}${product.remark ? `, ${product.remark}` : ""}), ${product.stock === null ? "available (no stock column)" : inStock ? `in stock (${product.stock})` : `only ${product.stock} in stock, need ${item.quantity}`}`);
   }
   const src = S.catalogSource ? `your Excel file ${S.catalogSource.file}` : "the example price list";
   log("Price & Stock", `Checked ${src} (${S.catalog.length} items):\n${notes.join("\n")}`);
@@ -613,26 +729,28 @@ Return one match per item. Reply with only JSON: {"matches": [{"item_id": 1, "sk
 }
 
 // Supplier Enquiry: ask suppliers, then read their answers
+/** Suppliers for an item: those who carry its brand; otherwise the any-brand suppliers (by category when they have one). */
 function suppliersFor(item) {
+  const lower = (t) => splitList(t).map((x) => x.toLowerCase());
+  if (item.brand) {
+    const byBrand = S.suppliers.filter((s) => lower(s.brands).includes(item.brand.toLowerCase()));
+    if (byBrand.length) return byBrand;
+  }
   const cat = item.category && item.category.toLowerCase();
-  const matching = S.suppliers.filter((s) => {
-    const cats = s.categories.split(",").map((c) => c.trim().toLowerCase()).filter(Boolean);
-    return cats.length === 0 || (cat && cats.includes(cat));
-  });
-  return matching.length ? matching : S.suppliers;
+  return S.suppliers.filter((s) => lower(s.brands).length === 0 && (lower(s.categories).length === 0 || (cat && lower(s.categories).includes(cat))));
 }
 const itemLine = (i) => `${i.quantity} ${i.unit || "pcs"} ${i.description}`;
-function askSuppliers(enquiry, items) {
-  busy("Supplier Enquiry");
+/** A brand agent asks its brand's suppliers. Returns how many suppliers were asked. */
+function askSuppliers(enquiry, brand, items) {
   const by = new Map();
   for (const item of items) for (const s of suppliersFor(item)) { const e = by.get(s.id) || { s, items: [] }; e.items.push(item); by.set(s.id, e); }
   for (const { s, items: list } of by.values()) {
-    const body = `Hello ${s.name}, this is ${S.settings.businessName}.\nPlease share your best price (per unit) and availability for:\n${list.map((i, n) => `${n + 1}. ${itemLine(i)}`).join("\n")}\n\nOur ref: E${enquiry.id}. Thank you.`;
-    S.supplierRequests.push({ id: id(), enquiry_id: enquiry.id, supplier_id: s.id, itemIds: list.map((i) => i.id), body, status: "sent", sent_at: S.now });
+    const ref = brand === NO_BRAND ? `E${enquiry.id}` : `E${enquiry.id}-${brand}`;
+    const body = `Hello ${s.name}, this is ${S.settings.businessName}.\nPlease share your best price (per unit) and availability${brand === NO_BRAND ? "" : ` for ${brand}`}:\n${list.map((i, n) => `${n + 1}. ${itemLine(i)}`).join("\n")}\n\nOur ref: ${ref}. Thank you.`;
+    S.supplierRequests.push({ id: id(), enquiry_id: enquiry.id, brand, supplier_id: s.id, itemIds: list.map((i) => i.id), body, status: "sent", sent_at: S.now });
     S.supplierChat.push({ supplier_id: s.id, direction: "out", body, at: iso() });
-    log("Supplier Enquiry", `Asked ${s.name} for ${list.map((i) => i.description).join(", ")}.`);
   }
-  return by.size;
+  return [...by.values()].map((v) => v.s.name);
 }
 async function handleSupplierReply(supplier, text) {
   busy("Supplier Enquiry");
@@ -701,10 +819,16 @@ function ruleSupplier(items, text) {
 // WhatsApp Reception: every conversational reply to the customer
 async function writeReply(enquiry, task, facts, kind) {
   busy("WhatsApp Reception");
-  const prompt = `You are the WhatsApp sales assistant for ${S.settings.businessName}.
+  const prompt = `You are a senior sales and customer service executive for ${S.settings.businessName}, answering on WhatsApp.
 Tone: ${S.settings.tone}
+How you work:
+- Be polite and courteous at all times: greet the customer by name, thank them, and close warmly.
+- Show you understood: briefly confirm what they asked for before asking anything.
+- When you need details, ask clear questions and give the choices we stock, numbered, so the customer can answer in one word. Ask only what you need for the quote.
+- If something is not available, apologise and offer the in-stock alternative from the facts, if there is one.
+- Never pressure the customer.
 Rules:
-- Reply in the customer's language. Keep it short, like a WhatsApp message from a helpful salesperson.
+- Reply in the customer's language. Keep it short and well laid out for WhatsApp (short lines, numbered choices).
 - Never state a price, stock level, discount or delivery date unless it appears in the facts you are given. If asked, say we will confirm.
 - Do not promise anything the facts do not support. If you cannot help, say the team will reply soon.
 - Write only the message text, with no notes or explanations.
@@ -720,15 +844,15 @@ Your task: ${task}`;
 function ruleReply(kind, facts) {
   const name = S.customer.name;
   switch (kind) {
-    case "ask_items": return `Hello ${name}! Which products, sizes and quantities do you need a price for?`;
-    case "questions": return `Thanks ${name}. To prepare your quotation:\n${facts.split("Questions:\n")[1] || ""}`;
-    case "waiting": return `Thanks ${name}! We're confirming price and availability for some items and will send your quotation shortly.`;
-    case "human": return `Sure ${name}, a member of our team will contact you shortly.`;
-    case "declined": return `No problem, ${name}. Thank you, and we're happy to help whenever you need anything.`;
-    case "accepted": return `Thank you ${name}! We've received your order. Our team will contact you to arrange delivery.`;
-    case "cannot_price": return `Thanks ${name}. We're checking these items and our team will get back to you soon.`;
-    case "question": return `Good question, ${name}. Let me check with the team and reply soon.`;
-    default: return `Hello ${name}! How can we help you today? Send the products and quantities you need and we'll quote.`;
+    case "ask_items": return `Hello ${name}, thank you for contacting ${S.settings.businessName}. Kindly share the products, models and quantities you need, and I'll prepare your quotation right away.`;
+    case "questions": return `Thank you, ${name}. To make sure I quote exactly the right items, could you please confirm:\n${facts.split("Questions:\n")[1] || ""}`;
+    case "waiting": return `Thank you, ${name}. I'm confirming price and availability for a few items with our team and will send your quotation shortly.`;
+    case "human": return `Certainly, ${name}. A member of our team will contact you shortly. Thank you for your patience.`;
+    case "declined": return `Thank you for letting us know, ${name}. We'll be glad to help whenever you need anything.`;
+    case "accepted": return `Thank you for your order, ${name}! It's confirmed, and our team will contact you shortly to arrange delivery.`;
+    case "cannot_price": return `Thank you, ${name}. I'm checking these items with our team and will get back to you soon.`;
+    case "question": return `Thank you for asking, ${name}. Let me check with our team and reply to you shortly.`;
+    default: return `Hello ${name}, thank you for your message. How may I help you today? Kindly share the products and quantities you need, and I'll prepare your quotation.`;
   }
 }
 
@@ -737,8 +861,14 @@ function createQuote(enquiry, priced) {
   busy("Estimate");
   const ref = enquiry.quote_ref || db.nextQuoteNumber();
   const st = S.settings;
-  const parts = [`*Quotation ${ref}*`, st.businessName, "",
-    ...priced.lines.map((l, n) => `${n + 1}. ${l.name}\n   ${l.quantity} ${l.unit || "pcs"} x ${money(l.unitPrice)} = ${money(l.lineTotal)}`), ""];
+  const parts = [`*Quotation ${ref}*`, st.businessName, ""];
+  const brands = [...new Set(priced.lines.map((l) => l.brand))];
+  let n = 0;
+  for (const b of brands) {
+    if (brands.length > 1 || b !== NO_BRAND) parts.push(`*${b}*`);
+    for (const l of priced.lines.filter((x) => x.brand === b)) parts.push(`${++n}. ${l.name}\n   ${l.quantity} ${l.unit || "pcs"} x ${money(l.unitPrice)} = ${money(l.lineTotal)}`);
+    parts.push("");
+  }
   if (priced.tax > 0) parts.push(`Subtotal: ${money(priced.subtotal)}`, `VAT ${st.taxPercent}%: ${money(priced.tax)}`);
   parts.push(`*Total: ${money(priced.total)}*`);
   if (priced.unavailable.length) parts.push("", "Not available at the moment:", ...priced.unavailable.map((i) => `- ${i.description}`));
@@ -834,8 +964,24 @@ async function runGather(enquiry) {
 async function runCheck(enquiry) {
   db.setStatus(enquiry.id, "checking");
   const need = await checkPrices(enquiry);
-  if (need.length && S.suppliers.length) {
-    const asked = askSuppliers(enquiry, need);
+  // The Coordinator hands each brand's items to that brand's agent.
+  const groups = new Map();
+  for (const item of db.items(enquiry.id)) { const b = brandOf(item); groups.set(b, [...(groups.get(b) || []), item]); }
+  let asked = 0;
+  for (const [brand, items] of groups) {
+    busy(brandAgent(brand));
+    await pause();
+    const short = items.filter((i) => need.includes(i));
+    const lines = items.map((i) => `${i.matched_name || i.description}: ${i.source === "stock" ? "from stock" : i.sku ? "not enough stock" : "not in the price list"}`);
+    if (short.length) {
+      const names = askSuppliers(enquiry, brand, short);
+      asked += names.length;
+      lines.push(names.length ? `Asked ${names.join(" and ")} for ${short.map((i) => i.description).join(", ")}.` : `No supplier for ${brand}. Add one under Suppliers.`);
+      if (!names.length) notifyOwner(`No supplier is set up for ${brand}, so ${short.map((i) => i.description).join(", ")} can't be priced. Add a supplier for ${brand}.`);
+    }
+    log(brandAgent(brand), lines.join("\n"));
+  }
+  if (need.length) {
     if (asked > 0) {
       db.setStatus(enquiry.id, "waiting_supplier");
       await reply(enquiry, "Tell the customer we are confirming price and availability for some items and will send the quotation shortly.",
@@ -850,7 +996,7 @@ async function quote(enquiry) {
   busy("Pricing & Margin");
   const priced = priceItems(db.items(enquiry.id));
   log("Pricing & Margin", priced.lines.length
-    ? priced.lines.map((l) => `${l.name}: ${l.quantity} x ${money(l.unitPrice)}`).join("\n") + `\nSubtotal ${money(priced.subtotal)}, VAT ${money(priced.tax)}, total ${money(priced.total)}`
+    ? priced.lines.map((l) => `${l.brand}: ${l.name}, ${l.quantity} x ${money(l.unitPrice)}`).join("\n") + `\nSubtotal ${money(priced.subtotal)}, VAT ${money(priced.tax)}, total ${money(priced.total)}`
     : "No item could be priced.");
   if (!priced.lines.length) {
     db.setStatus(enquiry.id, "needs_human", "None of the items could be priced");
@@ -879,7 +1025,19 @@ async function accept(enquiry) {
   db.attach(enquiry.id);
   db.setStatus(enquiry.id, "won", "Customer accepted the quote");
   await reply(enquiry, "Thank the customer and confirm we received their order for this quote. Explain the next steps (payment, delivery) only if they are in the business information; otherwise say our team will contact them to arrange delivery.", facts(enquiry), "accepted");
-  notifyOwner(`Order confirmed: ${S.customer.name} accepted quote ${enquiry.quote_ref} (${money(enquiry.quote_total || 0)}).`);
+  // One order per brand, so each brand's agent and suppliers handle their own part.
+  const priced = priceItems(db.items(enquiry.id));
+  const made = [];
+  for (const brand of [...new Set(priced.lines.map((l) => l.brand))]) {
+    const lines = priced.lines.filter((l) => l.brand === brand);
+    const subtotal = round2(lines.reduce((t, l) => t + l.lineTotal, 0));
+    const order = { id: `SO-${String(S.orders.length + 1).padStart(4, "0")}`, enquiry_id: enquiry.id, quote_ref: enquiry.quote_ref, customer: S.customer.name, brand, lines, subtotal, at: S.now, status: "confirmed" };
+    S.orders.push(order);
+    made.push(order);
+    busy(brandAgent(brand));
+    log(brandAgent(brand), `Order ${order.id}: ${lines.map((l) => `${l.quantity} x ${l.name}`).join(", ")} = ${money(subtotal)} before VAT.`);
+  }
+  notifyOwner(`Order confirmed: ${S.customer.name} accepted quote ${enquiry.quote_ref} (${money(enquiry.quote_total || 0)}). By brand: ${made.map((o) => `${o.brand} ${o.id} ${money(o.subtotal)}`).join("; ")}.`);
 }
 
 function facts(enquiry) {
@@ -906,6 +1064,8 @@ function onSupplierMessage(supplierId, text) {
       if (e && e.status === "waiting_supplier") await quote(e);
     }
     if (tab === "supplier" && S.drafts.some((d) => d.status === "pending")) tab = "approvals";
+    const still = db.openRequests()[0];
+    if (still) supplierPick = still.supplier_id;
   });
 }
 
@@ -941,7 +1101,7 @@ We sent quote ${e.quote_ref} and the customer has not replied. ${last ? "This is
     const finished = new Set();
     for (const r of db.openRequests()) {
       const age = (S.now - r.sent_at) / HOUR;
-      const s = S.suppliers.find((x) => x.id === r.supplier_id);
+      const s = S.suppliers.find((x) => x.id === r.supplier_id) || { id: r.supplier_id, name: supName(r.supplier_id) };
       if (age >= S.settings.supplierGiveUpHours) {
         r.status = "timeout";
         log("Follow-up", `${s.name} didn't answer within ${S.settings.supplierGiveUpHours} hours; going ahead without them.`);
@@ -1016,8 +1176,9 @@ const AGENTS = [
 const STEPS = [["gathering", "Gathering"], ["checking", "Checking prices"], ["waiting_supplier", "Asking suppliers"], ["awaiting_approval", "Your approval"], ["quoted", "Quote sent"], ["won", "Order won"]];
 
 const CUSTOMER_TRIES = [
-  "Hi, I need price for 50 pcs 4 inch PVC pipe and 10 elbows 4 inch",
+  "Hi, I need price for 50 pcs 4 inch PVC pipe Cosmoplast, 10 elbows 4 inch and 2 Pegler ball valves 1 inch",
   "Also add 2 gate valves 2 inch",
+  "Price for 5 Hepworth elbows 4 inch",
   "Do you deliver to Sharjah?",
   "Yes, confirm the order",
   "I need 20 PVC pipes",
@@ -1025,9 +1186,37 @@ const CUSTOMER_TRIES = [
 ];
 const SUPPLIER_TRIES = [
   "Elbow 4\" available, AED 2.30 each. Delivery tomorrow.",
+  "Pegler ball valve 1\" AED 21.50 each, in stock",
   "Ok, will check and revert",
   "Sorry, not available",
 ];
+
+/** Examples for your own list: in-stock items from two brands plus one that's out of stock. */
+function customerTries() {
+  if (!S.catalogSource) return CUSTOMER_TRIES;
+  const short = (c) => c.name.replace(/\s+/g, " ").slice(0, 60).trim();
+  const brands = allBrands().filter((b) => b !== NO_BRAND);
+  const inStock = brands.map((b) => S.catalog.find((c) => c.brand === b && c.stock > 0 && (c.price || c.resellerPrice))).filter(Boolean);
+  const out = S.catalog.find((c) => c.stock === 0 && c.cost);
+  const first = [...inStock.slice(0, 2).map((c, n) => `${n ? 3 : 2} x ${short(c)}`), out ? `5 x ${short(out)}` : null].filter(Boolean);
+  const third = inStock[2] || inStock[0];
+  return [
+    `Hi, please quote ${first.join(", ")}`,
+    third ? `Also add 1 x ${short(third)}` : null,
+    "What is the delivery time?",
+    "Yes, confirm the order",
+    inStock[0] ? `I need some ${inStock[0].category ? inStock[0].category.toLowerCase() : "items"} from ${inStock[0].brand}` : null,
+    "Can I talk to someone?",
+  ].filter(Boolean);
+}
+/** Supplier answers for whatever the picked supplier was asked. */
+function supplierTries() {
+  const reqs = db.openRequests(supplierPick);
+  if (!reqs.length) return SUPPLIER_TRIES;
+  const items = reqs.flatMap((r) => r.itemIds.map((i) => db.getItem(i))).filter(Boolean);
+  const offer = items.map((i) => `${i.description.slice(0, 50)}: AED ${((i.cost || i.list_price || 10) * 0.95).toFixed(2)} each, available`).join("\n");
+  return [offer, "Ok, will check and revert", "Sorry, not available"];
+}
 
 let tab = "customer";
 let supplierPick = 1;
@@ -1060,9 +1249,13 @@ function render() {
     working ? el("div", { class: "typing" }, `${working} is working…`) : null,
   );
   chat.scrollTop = chat.scrollHeight;
-  put($("#tries"), ...CUSTOMER_TRIES.map((t) => el("button", { type: "button", onclick: () => sendCustomer(t) }, t)));
+  put($("#tries"), ...customerTries().map((t) => el("button", { type: "button", onclick: () => sendCustomer(t) }, t)));
 
   // Agents
+  put($("#brand-agents"), ...allBrands().map((b) => {
+    const sup = S.suppliers.filter((s) => splitList(s.brands).some((x) => x.toLowerCase() === b.toLowerCase())).map((s) => s.name);
+    return el("div", { class: `agent${working === brandAgent(b) ? " working" : ""}` }, el("b", {}, brandAgent(b)), el("span", { class: "kind" }, sup.length ? `Suppliers: ${sup.join(", ")}` : "Any-brand suppliers"));
+  }));
   put($("#agents"), ...AGENTS.map(([n, k]) => el("div", { class: `agent${working === n ? " working" : ""}` }, el("b", {}, n), el("span", { class: "kind" }, k))));
   const e = db.openEnquiry() || db.latestEnquiry();
   $("#enq-ref").textContent = e ? `E${e.id}${e.quote_ref ? ` · ${e.quote_ref}` : ""}` : "";
@@ -1082,14 +1275,14 @@ function render() {
   if (!items.length) put(table, el("tr", {}, el("td", { class: "empty" }, e ? "No items yet." : "No enquiry yet.")));
   else {
     put(table, 
-      el("tr", {}, el("th", {}, "Customer asked for"), el("th", { class: "num" }, "Qty"), el("th", {}, "Matched"), el("th", {}, "From"), el("th", { class: "num" }, "Price")),
+      el("tr", {}, el("th", {}, "Customer asked for"), el("th", { class: "num" }, "Qty"), el("th", {}, "Brand"), el("th", {}, "Matched"), el("th", {}, "From"), el("th", { class: "num" }, "Price")),
       ...items.map((i) => {
         const p = unitPrice(i);
         const sup = i.supplier_id && S.suppliers.find((s) => s.id === i.supplier_id);
         const from = i.source === "stock" ? el("span", { class: "tag stock" }, "Stock")
           : i.source === "supplier" ? el("span", { class: "tag supplier" }, sup ? sup.name : "Supplier")
           : e.status === "gathering" ? el("span", { class: "muted" }, "…") : el("span", { class: "tag missing" }, i.sku ? "Low stock" : "Not listed");
-        return el("tr", {}, el("td", {}, i.description), el("td", { class: "num" }, `${i.quantity || "?"} ${i.unit || ""}`), el("td", {}, i.matched_name || "–"), el("td", {}, from), el("td", { class: "num" }, p == null ? "–" : money(p)));
+        return el("tr", {}, el("td", {}, i.description), el("td", { class: "num" }, `${i.quantity || "?"} ${i.unit || ""}`), el("td", {}, i.brand || (i.sku ? NO_BRAND : "–")), el("td", {}, i.matched_name || "–"), el("td", {}, from), el("td", { class: "num" }, p == null ? "–" : money(p)));
       }),
     );
   }
@@ -1103,10 +1296,11 @@ function render() {
     box.hidden = !n;
     if (!n) continue;
     box.classList.toggle("busy", !!working);
-    put(box, el("span", {}, n.text), n.tab && n.tab !== shown && !(wide.matches && (n.tab === "customer" || n.tab === "agents")) ? el("button", { class: "btn small primary", type: "button", onclick: () => { tab = n.tab; render(); } }, n.label) : null);
+    put(box, el("span", {}, n.text), n.tab && n.tab !== shown && !(wide.matches && (n.tab === "customer" || n.tab === "agents")) ? el("button", { class: "btn small primary", type: "button", onclick: () => { tab = n.tab; const r = db.openRequests()[0]; if (n.tab === "supplier" && r) supplierPick = r.supplier_id; render(); } }, n.label) : null);
   }
 
-  // Supplier
+  // Supplier: stay on a supplier that exists, preferring one we're waiting for
+  if (!S.suppliers.some((x) => x.id === supplierPick)) supplierPick = (db.openRequests()[0] || {}).supplier_id || (S.suppliers[0] || {}).id;
   const pick = $("#sup-pick");
   put(pick, ...S.suppliers.map((s) => el("option", { value: s.id, selected: s.id === supplierPick }, `${s.name}${db.openRequests(s.id).length ? " · waiting for your prices" : ""}`)));
   const sc = $("#sup-chat");
@@ -1115,7 +1309,9 @@ function render() {
     ...sm.map((m) => el("div", { class: `bubble ${m.direction === "in" ? "out" : "in"}` }, m.body, el("time", {}, hhmm(m.at)))),
     working ? el("div", { class: "typing", style: "align-self:flex-start" }, `${working} is working…`) : null);
   sc.scrollTop = sc.scrollHeight;
-  put($("#sup-tries"), ...SUPPLIER_TRIES.map((t) => el("button", { type: "button", onclick: () => sendSupplier(t) }, t)));
+  put($("#sup-tries"), ...supplierTries().map((t) => el("button", { type: "button", onclick: () => sendSupplier(t) }, t)));
+
+  renderBrands();
 
   // Approvals
   const drafts = S.drafts.filter((d) => d.status === "pending");
@@ -1132,14 +1328,18 @@ function render() {
 
 // Excel price list (column names as in src/catalog/excel.ts)
 const CATALOG_ROWS_SHOWN = 200;
+// Each field lists column names in order of preference; on each row the first one with a value is used.
 const COLUMNS = {
-  sku: ["sku", "code", "item code", "product code", "part no", "part number", "item no"],
-  name: ["name", "item", "item name", "description", "product", "product name", "material"],
-  category: ["category", "group", "item group", "type", "brand"],
+  sku: ["sku", "item code", "code", "product code", "part number", "part no", "item no"],
+  name: ["name", "item name", "description", "item", "product name", "product", "material"],
+  brand: ["brand", "make", "manufacturer", "brand name"],
+  category: ["category", "item group", "group", "type", "product category"],
   unit: ["unit", "uom", "units"],
-  price: ["price", "selling price", "sale price", "rate", "unit price", "sales price", "mrp"],
-  cost: ["cost", "cost price", "purchase price", "buying price", "purchase rate"],
-  stock: ["stock", "qty", "quantity", "available", "stock on hand", "in stock", "balance", "stock qty"],
+  price: ["customer price", "selling price", "sale price", "sales price", "price", "unit price", "mrp", "final price", "rate"],
+  resellerPrice: ["reseller price", "dealer price", "trade price", "wholesale price"],
+  cost: ["cost", "cost price", "purchase price", "buying price", "purchase rate", "last purchase", "last purchase price"],
+  stock: ["available qty", "available quantity", "stock", "qty", "quantity", "available", "stock on hand", "in stock", "balance", "stock qty"],
+  remark: ["remark", "remarks", "note", "notes", "moq"],
 };
 const cellText = (v) => (v == null ? "" : String(v).trim());
 function cellNumber(v) {
@@ -1148,23 +1348,28 @@ function cellNumber(v) {
   const n = Number(t);
   return Number.isFinite(n) ? n : null;
 }
-function readPriceList(rows) {
-  const header = (rows[0] || []).map((h) => cellText(h).toLowerCase());
-  const col = {};
-  header.forEach((title, i) => {
-    for (const [field, names] of Object.entries(COLUMNS)) if (col[field] === undefined && names.includes(title)) col[field] = i;
-  });
-  if (col.name === undefined) throw new Error('No item name column found. Name a column "Item Name" or "Description" in the first row.');
-  const items = [];
-  rows.slice(1).forEach((row, n) => {
-    const read = (f) => (col[f] === undefined ? null : row[col[f]]);
-    const name = cellText(read("name"));
-    if (!name) return;
-    items.push({ sku: cellText(read("sku")) || `ROW-${n + 2}`, name, category: cellText(read("category")) || null, unit: cellText(read("unit")) || null,
-      price: cellNumber(read("price")), cost: cellNumber(read("cost")), stock: cellNumber(read("stock")) });
-  });
-  if (!items.length) throw new Error("The first sheet has no item rows under the column names.");
-  return items;
+/** Reads one sheet. The header is the first of the top 10 rows that has an item name column; returns null when there is none. */
+function readSheet(rows, sheetName) {
+  for (let h = 0; h < Math.min(10, rows.length); h++) {
+    const header = (rows[h] || []).map((x) => cellText(x).toLowerCase());
+    const cols = {};
+    for (const [field, names] of Object.entries(COLUMNS)) cols[field] = names.map((n) => header.indexOf(n)).filter((i) => i >= 0);
+    if (!cols.name.length) continue;
+    // A sheet named after a brand (e.g. "OPTERNA") gives its brand to rows with no brand of their own.
+    const sheetBrand = /^(sheet|page|data|price ?list|stock|items?)\s*\d*$/i.test(sheetName.trim()) ? null : sheetName.trim();
+    const items = [];
+    rows.slice(h + 1).forEach((row, n) => {
+      const read = (f) => { for (const i of cols[f]) { const v = row[i]; if (cellText(v) !== "") return v; } return null; };
+      const name = cellText(read("name"));
+      if (!name) return;
+      items.push({ sku: cellText(read("sku")) || `${sheetName}-${h + n + 2}`, name, brand: cellText(read("brand")) || sheetBrand,
+        category: cellText(read("category")) || null, unit: cellText(read("unit")) || null,
+        price: cellNumber(read("price")), resellerPrice: cellNumber(read("resellerPrice")), cost: cellNumber(read("cost")),
+        stock: cellNumber(read("stock")), remark: cellText(read("remark")) || null });
+    });
+    return items;
+  }
+  return null;
 }
 async function uploadExcel(file) {
   const status = $("#source");
@@ -1172,15 +1377,61 @@ async function uploadExcel(file) {
   try {
     if (!window.XLSX) throw new Error("The Excel reader didn't load. Check your connection and reload the page.");
     const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
-    const sheet = wb.SheetNames[0];
-    const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheet], { header: 1, raw: true, defval: null });
-    S.catalog = readPriceList(rows);
-    S.catalogSource = { file: file.name, sheet: wb.SheetNames.length > 1 ? sheet : "" };
-    log("Price & Stock", `Loaded ${S.catalog.length} items from ${file.name}.`);
+    const items = [], used = [], notes = [];
+    for (const name of wb.SheetNames) {
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, raw: true, defval: null });
+      const found = readSheet(rows, name);
+      if (found && found.length) { items.push(...found); used.push(`${name} (${found.length})`); }
+      else if (!found) notes.push(...rows.map((r) => r.map(cellText).filter(Boolean).join(" ")).filter(Boolean));
+    }
+    if (!items.length) throw new Error('No sheet has an item name column. Name a column "Name", "Item Name" or "Description".');
+    S.catalog = items;
+    S.catalogNotes = notes.join("\n").slice(0, 3000);
+    S.catalogSource = { file: file.name, sheet: used.join(", ") };
+    addMissingBrandSuppliers();
+    log("Price & Stock", `Loaded ${items.length} items from ${file.name}: ${used.join(", ")}. Brands: ${allBrands().join(", ")}.`);
     save(); renderSetup(); render();
   } catch (e) {
     put(status, el("div", { class: "alert" }, `Couldn't read ${file.name}: ${e.message}`));
   }
+}
+
+let orderBrand = "";
+function renderBrands() {
+  const m = S.settings.margin;
+  const openIds = S.enquiries.filter((x) => OPEN.includes(x.status)).map((x) => x.id);
+  put($("#brand-table"),
+    el("tr", {}, el("th", {}, "Brand agent"), el("th", {}, "Suppliers"), el("th", { class: "num" }, "Items"), el("th", { class: "num" }, "Low stock"), el("th", { class: "num" }, "Margin %"), el("th", { class: "num" }, "In enquiries"), el("th", { class: "num" }, "Orders"), el("th", { class: "num" }, "Order value")),
+    ...allBrands().map((b) => {
+      const products = S.catalog.filter((c) => (c.brand || NO_BRAND) === b);
+      const sup = S.suppliers.filter((s) => splitList(s.brands).some((x) => x.toLowerCase() === b.toLowerCase())).map((s) => s.name);
+      const orders = S.orders.filter((o) => o.brand === b);
+      const margin = el("input", { type: "number", step: "any", min: 0, placeholder: String(m.defaultPercent), value: m.byBrand[b], "aria-label": `Margin for ${b}`, style: "width: 70px",
+        onchange: (ev) => { if (ev.target.value === "") delete m.byBrand[b]; else m.byBrand[b] = Number(ev.target.value); save(); render(); } });
+      return el("tr", {},
+        el("td", {}, el("b", {}, b), working === brandAgent(b) ? el("span", { class: "muted" }, " · working") : null),
+        el("td", {}, sup.length ? sup.join(", ") : el("span", { class: "tag missing" }, "None: any-brand suppliers are asked")),
+        el("td", { class: "num" }, products.length),
+        el("td", { class: "num" }, products.filter((c) => c.stock != null && c.stock <= 5).length),
+        el("td", { class: "num" }, margin),
+        el("td", { class: "num" }, S.items.filter((i) => openIds.includes(i.enquiry_id) && brandOf(i) === b && (i.sku || i.brand)).length),
+        el("td", { class: "num" }, orders.length),
+        el("td", { class: "num" }, money(orders.reduce((t, o) => t + o.subtotal, 0))));
+    }));
+  const pick = $("#order-brand");
+  put(pick, el("option", { value: "" }, "All brands"), ...allBrands().map((b) => el("option", { value: b, selected: b === orderBrand }, b)));
+  const list = S.orders.filter((o) => !orderBrand || o.brand === orderBrand);
+  const STATUS = [["confirmed", "Confirmed"], ["ordered", "Ordered from supplier"], ["delivered", "Delivered"], ["paid", "Paid"]];
+  put($("#orders"), list.length
+    ? [el("tr", {}, el("th", {}, "Order"), el("th", {}, "Brand"), el("th", {}, "Customer"), el("th", {}, "Items"), el("th", { class: "num" }, "Before VAT"), el("th", {}, "Status")),
+      ...list.map((o) => el("tr", {},
+        el("td", {}, el("b", {}, o.id), el("div", { class: "muted" }, `${o.quote_ref} · ${stamp(o.at)}`)),
+        el("td", {}, o.brand), el("td", {}, o.customer),
+        el("td", {}, o.lines.map((l) => `${l.quantity} x ${l.name}`).join("; ")),
+        el("td", { class: "num" }, money(o.subtotal)),
+        el("td", {}, el("select", { class: "btn small", "aria-label": `Status of ${o.id}`, onchange: (ev) => { o.status = ev.target.value; log(brandAgent(o.brand), `${o.id} is now ${ev.target.selectedOptions[0].textContent.toLowerCase()}.`); save(); render(); } },
+          ...STATUS.map(([v, label]) => el("option", { value: v, selected: o.status === v }, label))))))]
+    : [el("tr", {}, el("td", { class: "empty" }, "No orders yet. When the customer says yes to a quote, its items become one order per brand."))]);
 }
 
 /** One line on what the flow is waiting for, with a button to the place where it happens. */
@@ -1190,12 +1441,65 @@ function nextStep() {
   const e = db.openEnquiry();
   if (!e) return null;
   if (e.status === "waiting_supplier") {
-    const names = [...new Set(db.openRequests().map((r) => S.suppliers.find((x) => x.id === r.supplier_id).name))];
-    return { text: `Waiting for prices from ${names.join(" and ")}. Reply as the supplier, or tap +24 hours to skip a slow one.`, tab: "supplier", label: "Open Supplier" };
+    const names = [...new Set(db.openRequests().map((r) => supName(r.supplier_id)))];
+    return { text: `Waiting for prices from ${names.join(" and ")}. Reply as each supplier, or tap +24 hours to skip a slow one.`, tab: "supplier", label: "Open Supplier" };
   }
   if (e.status === "quoted") return { text: `Quote ${e.quote_ref} sent. Reply as the customer, or tap +24 hours to see a follow-up.`, tab: "customer", label: "Open Customer" };
   if (e.status === "needs_human") return { text: "The agents are paused and the chat is yours. Hand it back on the Agents panel.", tab: "agents", label: "Open Agents" };
   return null;
+}
+
+/** Replaces the example suppliers with one placeholder per brand that has no supplier, for you to rename or replace. */
+function addMissingBrandSuppliers() {
+  const examples = freshState().suppliers.map((x) => x.name);
+  const keep = S.suppliers.filter((x) => !examples.includes(x.name));
+  closeRequests(S.suppliers.filter((x) => !keep.includes(x)).map((x) => x.id));
+  S.suppliers = keep;
+  for (const b of allBrands().filter((b) => b !== NO_BRAND)) {
+    if (!S.suppliers.some((x) => splitList(x.brands).some((y) => y.toLowerCase() === b.toLowerCase()))) {
+      S.suppliers.push({ id: id(), name: `${b} distributor (example)`, phone: "", brands: b, categories: "", last_inbound_at: null });
+    }
+  }
+  if (S.suppliers[0]) supplierPick = S.suppliers[0].id;
+}
+
+function closeRequests(supplierIds) {
+  for (const r of S.supplierRequests) if (supplierIds.includes(r.supplier_id) && (r.status === "sent" || r.status === "reminded")) r.status = "timeout";
+}
+function removeSupplier(sid) {
+  closeRequests([sid]);
+  S.suppliers = S.suppliers.filter((s) => s.id !== sid);
+  if (supplierPick === sid && S.suppliers[0]) supplierPick = S.suppliers[0].id;
+  save(); renderSetup(); render();
+}
+const SUPPLIER_COLUMNS = {
+  name: ["supplier", "supplier name", "name", "company", "vendor", "vendor name"],
+  phone: ["phone", "mobile", "whatsapp", "whatsapp number", "phone number", "contact"],
+  email: ["email", "e-mail", "email address"],
+  brands: ["brand", "brands", "make", "makes"],
+  categories: ["category", "categories", "group", "type"],
+};
+async function uploadSuppliers(file) {
+  const status = $("#supplier-status");
+  try {
+    if (!window.XLSX) throw new Error("The Excel reader didn't load. Check your connection and reload the page.");
+    const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: false, defval: null });
+    const header = (rows[0] || []).map((h) => cellText(h).toLowerCase());
+    const col = {};
+    header.forEach((t, i) => { for (const [f, names] of Object.entries(SUPPLIER_COLUMNS)) if (col[f] === undefined && names.includes(t)) col[f] = i; });
+    if (col.name === undefined) throw new Error('No supplier name column found. Name a column "Supplier" or "Name" in the first row.');
+    const list = rows.slice(1).map((r) => ({ name: cellText(r[col.name]), phone: col.phone === undefined ? "" : cellText(r[col.phone]), email: col.email === undefined ? "" : cellText(r[col.email]),
+      brands: col.brands === undefined ? "" : cellText(r[col.brands]).replace(/\s*[;/|]\s*/g, ", "), categories: col.categories === undefined ? "" : cellText(r[col.categories]) })).filter((x) => x.name);
+    if (!list.length) throw new Error("No supplier rows under the column names.");
+    closeRequests(S.suppliers.map((x) => x.id));
+    S.suppliers = list.map((x) => ({ id: id(), ...x, last_inbound_at: null }));
+    supplierPick = S.suppliers[0].id;
+    put(status, el("p", { class: "muted" }, `Loaded ${list.length} suppliers from ${file.name}.`));
+    save(); renderSetup(); render();
+  } catch (e) {
+    put(status, el("div", { class: "alert" }, `Couldn't read ${file.name}: ${e.message}`));
+  }
 }
 
 function renderSetup() {
@@ -1204,22 +1508,30 @@ function renderSetup() {
   const num = (obj, key, step) => el("input", { type: "number", step, min: 0, value: obj[key], "aria-label": key, onchange: (ev) => { obj[key] = ev.target.value === "" ? null : Number(ev.target.value); save(); render(); } });
   const shown = S.catalog.slice(0, CATALOG_ROWS_SHOWN);
   put($("#source"), S.catalogSource
-    ? el("span", { class: "tag stock" }, `Your Excel: ${S.catalogSource.file}${S.catalogSource.sheet ? `, sheet "${S.catalogSource.sheet}"` : ""} · ${S.catalog.length} items`)
+    ? el("span", { class: "tag stock" }, `Your Excel: ${S.catalogSource.file}${S.catalogSource.sheet ? ` · sheets ${S.catalogSource.sheet}` : ""} · ${S.catalog.length} items`)
     : el("span", { class: "tag" }, `Example list · ${S.catalog.length} items`));
+  put($("#catalog-notes"), S.catalogNotes ? el("details", { style: "margin-bottom: 10px" }, el("summary", { class: "muted" }, "Notes from the price list (minimum order rules and so on)"), el("pre", { class: "muted", style: "white-space: pre-wrap; font-size: 12px" }, S.catalogNotes)) : null);
   put(cat,
-    el("tr", {}, el("th", {}, "Code"), el("th", {}, "Item"), el("th", {}, "Category"), el("th", { class: "num" }, "Selling price"), el("th", { class: "num" }, "Cost"), el("th", { class: "num" }, "Stock")),
-    ...shown.map((c) => el("tr", {}, el("td", {}, c.sku), el("td", {}, c.name), el("td", {}, c.category || ""), el("td", { class: "num" }, num(c, "price", "0.01")), el("td", { class: "num" }, num(c, "cost", "0.01")), el("td", { class: "num" }, num(c, "stock", "1")))),
-    S.catalog.length > shown.length ? el("tr", {}, el("td", { colspan: 6, class: "muted" }, `Showing the first ${shown.length} of ${S.catalog.length} items. The agent checks all of them.`)) : null,
+    el("tr", {}, el("th", {}, "Code"), el("th", {}, "Item"), el("th", {}, "Brand"), el("th", {}, "Category"), el("th", { class: "num" }, "Customer price"), el("th", { class: "num" }, "Reseller price"), el("th", { class: "num" }, "Cost"), el("th", { class: "num" }, "Stock")),
+    ...shown.map((c) => el("tr", {}, el("td", {}, c.sku), el("td", {}, c.name), el("td", {}, c.brand || ""), el("td", {}, c.category || ""), el("td", { class: "num" }, num(c, "price", "0.01")), el("td", { class: "num" }, num(c, "resellerPrice", "0.01")), el("td", { class: "num" }, num(c, "cost", "0.01")), el("td", { class: "num" }, num(c, "stock", "1")))),
+    S.catalog.length > shown.length ? el("tr", {}, el("td", { colspan: 8, class: "muted" }, `Showing the first ${shown.length} of ${S.catalog.length} items. The agent checks all of them.`)) : null,
   );
-  put($("#suppliers"), 
-    el("tr", {}, el("th", {}, "Supplier"), el("th", {}, "Asked about")),
-    ...S.suppliers.map((s) => el("tr", {}, el("td", {}, s.name), el("td", {}, s.categories || "Everything"))),
+  const text = (obj, key, label) => el("input", { type: "text", value: obj[key] || "", "aria-label": label, onchange: (ev) => { obj[key] = ev.target.value.trim(); save(); render(); } });
+  put($("#suppliers"),
+    el("tr", {}, el("th", {}, "Supplier"), el("th", {}, "WhatsApp"), el("th", {}, "Brands"), el("th", {}, "Categories"), el("th", {}, "")),
+    ...S.suppliers.map((s) => el("tr", {},
+      el("td", {}, text(s, "name", "Supplier name")), el("td", {}, text(s, "phone", "WhatsApp number")),
+      el("td", {}, text(s, "brands", "Brands")), el("td", {}, text(s, "categories", "Categories")),
+      el("td", {}, el("button", { class: "btn small danger", type: "button", onclick: () => removeSupplier(s.id) }, "Remove")))),
   );
   const st = S.settings;
   const field = (label, input) => el("label", {}, label, input);
   const bind = (obj, key, type = "text") => el("input", { type, value: obj[key], step: type === "number" ? "any" : null, onchange: (ev) => { obj[key] = type === "number" ? Number(ev.target.value) || 0 : ev.target.value; save(); render(); } });
   put($("#settings"), 
     field("Business name", bind(st, "businessName")),
+    field("The demo customer is", el("select", { onchange: (ev) => { S.customer.type = ev.target.value; save(); render(); } },
+      el("option", { value: "customer", selected: S.customer.type !== "reseller" }, "An end customer (customer price)"),
+      el("option", { value: "reseller", selected: S.customer.type === "reseller" }, "A reseller (reseller price)"))),
     field("Default margin %", bind(st.margin, "defaultPercent", "number")),
     field("Price from", el("select", { onchange: (ev) => { st.margin.priceBasis = ev.target.value; save(); render(); } },
       el("option", { value: "list", selected: st.margin.priceBasis === "list" }, "Selling price in list"),
@@ -1247,14 +1559,25 @@ function sendSupplier(text) {
 }
 
 // Wiring
-$("#tabs").addEventListener("click", (ev) => { const b = ev.target.closest("button"); if (b) { tab = b.dataset.p; render(); } });
+$("#tabs").addEventListener("click", (ev) => {
+  const b = ev.target.closest("button");
+  if (!b) return;
+  tab = b.dataset.p;
+  // Open the Supplier tab on a supplier we're waiting for.
+  const waiting = db.openRequests()[0];
+  if (tab === "supplier" && waiting && !db.openRequests(supplierPick).length) supplierPick = waiting.supplier_id;
+  render();
+});
 $("#composer").addEventListener("submit", (ev) => { ev.preventDefault(); const t = $("#msg").value; $("#msg").value = ""; sendCustomer(t); });
 $("#msg").addEventListener("keydown", (ev) => { if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); $("#composer").requestSubmit(); } });
 $("#sup-composer").addEventListener("submit", (ev) => { ev.preventDefault(); const t = $("#sup-msg").value; $("#sup-msg").value = ""; sendSupplier(t); });
 $("#sup-msg").addEventListener("keydown", (ev) => { if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); $("#sup-composer").requestSubmit(); } });
 $("#sup-pick").addEventListener("change", (ev) => { supplierPick = Number(ev.target.value); render(); });
 $("#excel-file").addEventListener("change", (ev) => { const f = ev.target.files[0]; ev.target.value = ""; if (f) uploadExcel(f); });
-$("#use-example").addEventListener("click", () => { S.catalog = freshState().catalog; S.catalogSource = null; save(); renderSetup(); render(); });
+$("#use-example").addEventListener("click", () => { const f = freshState(); S.catalog = f.catalog; S.suppliers = f.suppliers; S.catalogSource = null; S.catalogNotes = ""; save(); renderSetup(); render(); });
+$("#order-brand").addEventListener("change", (ev) => { orderBrand = ev.target.value; render(); });
+$("#add-supplier").addEventListener("click", () => { S.suppliers.push({ id: id(), name: "New supplier", phone: "", brands: "", categories: "", last_inbound_at: null }); save(); renderSetup(); render(); });
+$("#supplier-file").addEventListener("change", (ev) => { const f = ev.target.files[0]; ev.target.value = ""; if (f) uploadSuppliers(f); });
 $("#plus4").addEventListener("click", () => advance(4));
 $("#plus24").addEventListener("click", () => advance(24));
 let resetArmed = false;
