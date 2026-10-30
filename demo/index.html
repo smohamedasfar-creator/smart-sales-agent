@@ -290,6 +290,11 @@
           <div class="tablewrap"><table id="suppliers"></table></div>
         </div>
         <div class="card">
+          <h2>Margins</h2>
+          <p class="muted">Used when a price is worked out from cost: items from a supplier, or every item when "Price from" is "Cost + margin". The first one set wins: the item's own margin (from your list), then its category's, then its brand's (on the Brands tab), then the default.</p>
+          <div class="tablewrap"><table id="category-margins"></table></div>
+        </div>
+        <div class="card">
           <h2>Settings</h2>
           <form class="form" id="settings" onsubmit="return false"></form>
         </div>
@@ -490,31 +495,43 @@ function searchCatalog(description, limit = 8) {
 // ---------------------------------------------------------------------------
 
 const round2 = (v) => Math.round(Number((v * 100).toPrecision(12))) / 100;
-function marginPercent(item) {
+/** The margin for an item and where it comes from: the customer's own, then the item's, its category's, its brand's, the default. */
+function marginFor(item) {
   const m = S.settings.margin;
-  const category = item.category;
-  if (S.customer.phone in m.byCustomer) return m.byCustomer[S.customer.phone];
-  if (item.brand && m.byBrand && m.byBrand[item.brand] != null) return m.byBrand[item.brand];
-  if (category) { const k = Object.keys(m.byCategory).find((n) => n.toLowerCase() === category.toLowerCase()); if (k) return m.byCategory[k]; }
-  return m.defaultPercent;
+  const reseller = S.customer.type === "reseller";
+  if (S.customer.phone in m.byCustomer) return { percent: m.byCustomer[S.customer.phone], from: "customer margin" };
+  const own = reseller ? item.margin_reseller : item.margin_customer;
+  if (own != null) return { percent: own, from: "item margin" };
+  const cat = item.category && Object.keys(m.byCategory).find((n) => n.toLowerCase() === item.category.toLowerCase());
+  if (cat) return { percent: m.byCategory[cat], from: `${cat} margin` };
+  if (item.brand && m.byBrand[item.brand] != null) return { percent: m.byBrand[item.brand], from: `${item.brand} margin` };
+  return { percent: m.defaultPercent, from: "default margin" };
 }
 function roundUp(v, step) { return step <= 0 ? round2(v) : round2(Math.ceil(v / step - 1e-9) * step); }
-function unitPrice(item) {
+/** The selling price and how it was worked out. Resellers get reseller prices and margins, end customers customer ones. */
+function priceDetail(item) {
   const m = S.settings.margin;
   if (item.available !== 1) return null;
-  // Resellers get the reseller price, end customers the customer price; each falls back to the other.
-  const list = S.customer.type === "reseller" ? (item.reseller_price || item.list_price) : (item.list_price || item.reseller_price);
-  if (item.source === "stock" && m.priceBasis === "list" && list > 0) return round2(list);
-  if (item.cost > 0) return roundUp(item.cost * (1 + marginPercent(item) / 100), m.roundTo);
-  if (list > 0) return round2(list);
+  const reseller = S.customer.type === "reseller";
+  const own = reseller ? item.reseller_price : item.list_price;
+  const other = reseller ? item.list_price : item.reseller_price;
+  const label = reseller ? "reseller price" : "customer price";
+  if (item.source === "stock" && m.priceBasis === "list" && own > 0) return { price: round2(own), how: `${label} from the list` };
+  if (item.cost > 0) {
+    const mg = marginFor(item);
+    return { price: roundUp(item.cost * (1 + mg.percent / 100), m.roundTo), how: `cost ${money(item.cost)} + ${mg.percent}% ${mg.from}` };
+  }
+  if (own > 0) return { price: round2(own), how: `${label} from the list` };
+  if (other > 0) return { price: round2(other), how: `${reseller ? "customer" : "reseller"} price from the list` };
   return null;
 }
+const unitPrice = (item) => (priceDetail(item) || {}).price ?? null;
 function priceItems(items) {
   const lines = [], unavailable = [];
   for (const item of items) {
     const p = unitPrice(item);
     if (p === null) { unavailable.push(item); continue; }
-    lines.push({ itemId: item.id, brand: brandOf(item), sku: item.sku, name: item.matched_name || item.description, quantity: item.quantity, unit: item.unit, unitPrice: p, lineTotal: round2(p * item.quantity) });
+    lines.push({ itemId: item.id, how: priceDetail(item).how, brand: brandOf(item), sku: item.sku, name: item.matched_name || item.description, quantity: item.quantity, unit: item.unit, unitPrice: p, lineTotal: round2(p * item.quantity) });
   }
   const subtotal = round2(lines.reduce((s, l) => s + l.lineTotal, 0));
   const tax = round2((subtotal * S.settings.taxPercent) / 100);
@@ -719,7 +736,7 @@ Return one match per item. Reply with only JSON: {"matches": [{"item_id": 1, "sk
       continue;
     }
     const inStock = product.stock === null || product.stock >= item.quantity;
-    Object.assign(item, { sku: product.sku, matched_name: product.name, brand: product.brand || null, category: product.category, unit: item.unit || product.unit, list_price: product.price, reseller_price: product.resellerPrice ?? null, cost: product.cost, available: inStock ? 1 : 0, source: inStock ? "stock" : null });
+    Object.assign(item, { sku: product.sku, matched_name: product.name, brand: product.brand || null, category: product.category, unit: item.unit || product.unit, list_price: product.price, reseller_price: product.resellerPrice ?? null, margin_customer: product.marginCustomer ?? null, margin_reseller: product.marginReseller ?? null, cost: product.cost, available: inStock ? 1 : 0, source: inStock ? "stock" : null });
     if (!inStock) needSupplier.push(item);
     notes.push(`${item.description} → ${product.sku} (${brandOf(item)}${product.remark ? `, ${product.remark}` : ""}), ${product.stock === null ? "available (no stock column)" : inStock ? `in stock (${product.stock})` : `only ${product.stock} in stock, need ${item.quantity}`}`);
   }
@@ -830,6 +847,7 @@ How you work:
 Rules:
 - Reply in the customer's language. Keep it short and well laid out for WhatsApp (short lines, numbered choices).
 - Never state a price, stock level, discount or delivery date unless it appears in the facts you are given. If asked, say we will confirm.
+- We are the supplier. Never mention our suppliers, distributors, sourcing, or that we are checking with anyone.
 - Do not promise anything the facts do not support. If you cannot help, say the team will reply soon.
 - Write only the message text, with no notes or explanations.
 ${UNTRUSTED_NOTE}
@@ -846,11 +864,11 @@ function ruleReply(kind, facts) {
   switch (kind) {
     case "ask_items": return `Hello ${name}, thank you for contacting ${S.settings.businessName}. Kindly share the products, models and quantities you need, and I'll prepare your quotation right away.`;
     case "questions": return `Thank you, ${name}. To make sure I quote exactly the right items, could you please confirm:\n${facts.split("Questions:\n")[1] || ""}`;
-    case "waiting": return `Thank you, ${name}. I'm confirming price and availability for a few items with our team and will send your quotation shortly.`;
+    case "waiting": return `Thank you, ${name}. I'm preparing your quotation now and will share it with you shortly.`;
     case "human": return `Certainly, ${name}. A member of our team will contact you shortly. Thank you for your patience.`;
     case "declined": return `Thank you for letting us know, ${name}. We'll be glad to help whenever you need anything.`;
     case "accepted": return `Thank you for your order, ${name}! It's confirmed, and our team will contact you shortly to arrange delivery.`;
-    case "cannot_price": return `Thank you, ${name}. I'm checking these items with our team and will get back to you soon.`;
+    case "cannot_price": return `Thank you, ${name}. I'll get back to you shortly with the details for these items.`;
     case "question": return `Thank you for asking, ${name}. Let me check with our team and reply to you shortly.`;
     default: return `Hello ${name}, thank you for your message. How may I help you today? Kindly share the products and quantities you need, and I'll prepare your quotation.`;
   }
@@ -984,8 +1002,8 @@ async function runCheck(enquiry) {
   if (need.length) {
     if (asked > 0) {
       db.setStatus(enquiry.id, "waiting_supplier");
-      await reply(enquiry, "Tell the customer we are confirming price and availability for some items and will send the quotation shortly.",
-        `Items being confirmed:\n${need.map((i) => `- ${i.description}`).join("\n")}`, "waiting");
+      await reply(enquiry, "Thank the customer and tell them we are preparing their quotation and will share it shortly. Do not mention suppliers, stock, availability or checking anything.",
+        `Items requested:\n${db.items(enquiry.id).map((i) => `- ${i.quantity} ${i.unit || ""} ${i.matched_name || i.description}`).join("\n")}`, "waiting");
       return;
     }
   }
@@ -996,11 +1014,11 @@ async function quote(enquiry) {
   busy("Pricing & Margin");
   const priced = priceItems(db.items(enquiry.id));
   log("Pricing & Margin", priced.lines.length
-    ? priced.lines.map((l) => `${l.brand}: ${l.name}, ${l.quantity} x ${money(l.unitPrice)}`).join("\n") + `\nSubtotal ${money(priced.subtotal)}, VAT ${money(priced.tax)}, total ${money(priced.total)}`
+    ? priced.lines.map((l) => `${l.brand}: ${l.name}, ${l.quantity} x ${money(l.unitPrice)} (${l.how})`).join("\n") + `\nSubtotal ${money(priced.subtotal)}, VAT ${money(priced.tax)}, total ${money(priced.total)}`
     : "No item could be priced.");
   if (!priced.lines.length) {
     db.setStatus(enquiry.id, "needs_human", "None of the items could be priced");
-    await reply(enquiry, "Tell the customer we are checking these items and our team will get back to them soon.", "", "cannot_price");
+    await reply(enquiry, "Thank the customer and say we will get back to them shortly with the details. Do not mention suppliers, stock or checking anything.", "", "cannot_price");
     notifyOwner(`Enquiry E${enquiry.id}: no item could be priced. Please check.`);
     return;
   }
@@ -1340,8 +1358,12 @@ const COLUMNS = {
   cost: ["cost", "cost price", "purchase price", "buying price", "purchase rate", "last purchase", "last purchase price"],
   stock: ["available qty", "available quantity", "stock", "qty", "quantity", "available", "stock on hand", "in stock", "balance", "stock qty"],
   remark: ["remark", "remarks", "note", "notes", "moq"],
+  marginCustomer: ["margin customer", "customer margin", "margin", "margin %", "margin%"],
+  marginReseller: ["margin re seller", "margin reseller", "reseller margin", "margin re-seller"],
 };
 const cellText = (v) => (v == null ? "" : String(v).trim());
+/** Margins written as fractions (0.5) become percents (50); numbers of 5 and over are taken as percents already. */
+const asPercent = (v) => (v == null ? null : v < 5 ? round2(v * 100) : v);
 function cellNumber(v) {
   const t = cellText(v).replace(/[^0-9.-]/g, "");
   if (t === "") return null;
@@ -1365,7 +1387,8 @@ function readSheet(rows, sheetName) {
       items.push({ sku: cellText(read("sku")) || `${sheetName}-${h + n + 2}`, name, brand: cellText(read("brand")) || sheetBrand,
         category: cellText(read("category")) || null, unit: cellText(read("unit")) || null,
         price: cellNumber(read("price")), resellerPrice: cellNumber(read("resellerPrice")), cost: cellNumber(read("cost")),
-        stock: cellNumber(read("stock")), remark: cellText(read("remark")) || null });
+        stock: cellNumber(read("stock")), remark: cellText(read("remark")) || null,
+        marginCustomer: asPercent(cellNumber(read("marginCustomer"))), marginReseller: asPercent(cellNumber(read("marginReseller"))) });
     });
     return items;
   }
@@ -1510,11 +1533,23 @@ function renderSetup() {
   put($("#source"), S.catalogSource
     ? el("span", { class: "tag stock" }, `Your Excel: ${S.catalogSource.file}${S.catalogSource.sheet ? ` · sheets ${S.catalogSource.sheet}` : ""} · ${S.catalog.length} items`)
     : el("span", { class: "tag" }, `Example list · ${S.catalog.length} items`));
+  const m = S.settings.margin;
+  const cats = [...new Map(S.catalog.filter((c) => c.category).map((c) => [c.category.toLowerCase(), c])).values()].sort((a, b) => (a.brand || "").localeCompare(b.brand || "") || a.category.localeCompare(b.category));
+  put($("#category-margins"),
+    el("tr", {}, el("th", {}, "Category"), el("th", {}, "Brands"), el("th", { class: "num" }, "Items"), el("th", { class: "num" }, "With own margin"), el("th", { class: "num" }, "Category margin %")),
+    ...cats.map((c) => {
+      const items = S.catalog.filter((x) => (x.category || "").toLowerCase() === c.category.toLowerCase());
+      const key = Object.keys(m.byCategory).find((k) => k.toLowerCase() === c.category.toLowerCase()) || c.category;
+      return el("tr", {}, el("td", {}, c.category), el("td", {}, [...new Set(items.map((x) => x.brand).filter(Boolean))].join(", ")),
+        el("td", { class: "num" }, items.length), el("td", { class: "num" }, items.filter((x) => (S.customer.type === "reseller" ? x.marginReseller : x.marginCustomer) != null).length),
+        el("td", { class: "num" }, el("input", { type: "number", step: "any", min: 0, placeholder: "–", value: m.byCategory[key], "aria-label": `Margin for ${c.category}`, style: "width: 80px",
+          onchange: (ev) => { if (ev.target.value === "") delete m.byCategory[key]; else m.byCategory[key] = Number(ev.target.value); save(); render(); } })));
+    }));
   put($("#catalog-notes"), S.catalogNotes ? el("details", { style: "margin-bottom: 10px" }, el("summary", { class: "muted" }, "Notes from the price list (minimum order rules and so on)"), el("pre", { class: "muted", style: "white-space: pre-wrap; font-size: 12px" }, S.catalogNotes)) : null);
   put(cat,
-    el("tr", {}, el("th", {}, "Code"), el("th", {}, "Item"), el("th", {}, "Brand"), el("th", {}, "Category"), el("th", { class: "num" }, "Customer price"), el("th", { class: "num" }, "Reseller price"), el("th", { class: "num" }, "Cost"), el("th", { class: "num" }, "Stock")),
-    ...shown.map((c) => el("tr", {}, el("td", {}, c.sku), el("td", {}, c.name), el("td", {}, c.brand || ""), el("td", {}, c.category || ""), el("td", { class: "num" }, num(c, "price", "0.01")), el("td", { class: "num" }, num(c, "resellerPrice", "0.01")), el("td", { class: "num" }, num(c, "cost", "0.01")), el("td", { class: "num" }, num(c, "stock", "1")))),
-    S.catalog.length > shown.length ? el("tr", {}, el("td", { colspan: 8, class: "muted" }, `Showing the first ${shown.length} of ${S.catalog.length} items. The agent checks all of them.`)) : null,
+    el("tr", {}, el("th", {}, "Code"), el("th", {}, "Item"), el("th", {}, "Brand"), el("th", {}, "Category"), el("th", { class: "num" }, "Customer price"), el("th", { class: "num" }, "Reseller price"), el("th", { class: "num" }, "Cost"), el("th", { class: "num" }, "Margin % customer"), el("th", { class: "num" }, "Margin % reseller"), el("th", { class: "num" }, "Stock")),
+    ...shown.map((c) => el("tr", {}, el("td", {}, c.sku), el("td", {}, c.name), el("td", {}, c.brand || ""), el("td", {}, c.category || ""), el("td", { class: "num" }, num(c, "price", "0.01")), el("td", { class: "num" }, num(c, "resellerPrice", "0.01")), el("td", { class: "num" }, num(c, "cost", "0.01")), el("td", { class: "num" }, num(c, "marginCustomer", "any")), el("td", { class: "num" }, num(c, "marginReseller", "any")), el("td", { class: "num" }, num(c, "stock", "1")))),
+    S.catalog.length > shown.length ? el("tr", {}, el("td", { colspan: 10, class: "muted" }, `Showing the first ${shown.length} of ${S.catalog.length} items. The agent checks all of them.`)) : null,
   );
   const text = (obj, key, label) => el("input", { type: "text", value: obj[key] || "", "aria-label": label, onchange: (ev) => { obj[key] = ev.target.value.trim(); save(); render(); } });
   put($("#suppliers"),
