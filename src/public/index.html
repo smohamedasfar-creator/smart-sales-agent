@@ -83,6 +83,7 @@
   </section>
 
   <section id="settings" hidden>
+    <div class="card" id="connections"></div>
     <div class="card">
       <div class="grid">
         <div><label>Business name</label><input id="businessName"></div>
@@ -229,6 +230,29 @@ async function loadSettings() {
   $("byCustomer").value = JSON.stringify(s.margin.byCustomer);
   $("personalContacts").value = (s.personalContacts || []).map((c) => `${c.phone}, ${c.name}`).join("\n");
 }
+// Connections: the keys live in the server's .env file (never in this page); this shows what is set up and where to get each one.
+async function loadConnections() {
+  const c = await api("/connections");
+  const dot = (ok) => `<span class="badge ${ok ? "won" : "needs_human"}">${ok ? "Connected" : "Not connected"}</span>`;
+  const link = (url, text) => `<a href="${url}" target="_blank" rel="noopener">${text}</a>`;
+  $("connections").innerHTML = `
+    <strong>Connections</strong>
+    <p class="muted">Keys and passwords are kept in the <code>.env</code> file on your server, not on this page. Fill in the lines named below, then restart the app.</p>
+    <table>
+      <tr><td><strong>Claude</strong> (the AI agents)</td><td>${dot(c.claude)}</td>
+        <td>Create a key at ${link("https://console.anthropic.com/settings/keys", "Anthropic Console → API keys")}. Set <code>ANTHROPIC_API_KEY</code>.</td></tr>
+      <tr><td><strong>WhatsApp</strong> (Meta)</td><td>${dot(c.whatsapp.connected)}</td>
+        <td>In ${link("https://developers.facebook.com/apps", "Meta for Developers → your app → WhatsApp → API setup")}: set <code>WHATSAPP_ACCESS_TOKEN</code> (a permanent System User token from ${link("https://business.facebook.com/settings/system-users", "Business settings → System users")}) and <code>WHATSAPP_PHONE_NUMBER_ID</code>.
+        App settings → Basic gives <code>WHATSAPP_APP_SECRET</code>; choose any <code>WHATSAPP_VERIFY_TOKEN</code>.<br>
+        Webhook (WhatsApp → Configuration): <code>${esc(c.whatsapp.webhookUrl)}</code> ${c.whatsapp.webhookReady ? "" : `<span class="badge needs_human">app secret or verify token missing</span>`}, subscribe to <em>messages</em>.<br>
+        Templates (${link("https://business.facebook.com/wa/manage/message-templates/", "WhatsApp Manager → Message templates")}): follow-up ${c.whatsapp.followupTemplate ? `<code>${esc(c.whatsapp.followupTemplate)}</code>` : "not set"}, supplier ${c.whatsapp.supplierTemplate ? `<code>${esc(c.whatsapp.supplierTemplate)}</code>` : "not set"}.</td></tr>
+      <tr><td><strong>Zoho</strong> (${esc(c.zoho.app === "inventory" ? "Inventory" : "Books")})</td><td>${dot(c.zoho.connected)}</td>
+        <td>At ${link(`https://api-console.${c.zoho.domain}`, "Zoho API Console")} create a Self Client and a refresh token (scope <code>ZohoBooks.fullaccess.all</code> or <code>ZohoInventory.fullaccess.all</code>). Set <code>ZOHO_CLIENT_ID</code>, <code>ZOHO_CLIENT_SECRET</code>, <code>ZOHO_REFRESH_TOKEN</code>, <code>ZOHO_ORGANIZATION_ID</code> and <code>ZOHO_DOMAIN</code> (zoho.com, zoho.in, zoho.eu…). Price list in use: ${esc(c.priceList)}.</td></tr>
+      <tr><td><strong>Email</strong> (suppliers)</td><td>${dot(c.email.connected)}</td>
+        <td>Set <code>EMAIL_USER</code>, <code>EMAIL_PASSWORD</code> (an app password), <code>EMAIL_SMTP_HOST</code> and <code>EMAIL_IMAP_HOST</code>.${c.email.from ? ` Sending as ${esc(c.email.from)}.` : ""}</td></tr>
+    </table>`;
+}
+
 $("save-settings").addEventListener("click", async () => {
   let byCategory, byCustomer;
   try { byCategory = JSON.parse($("byCategory").value || "{}"); byCustomer = JSON.parse($("byCustomer").value || "{}"); }
@@ -257,7 +281,7 @@ function refresh() {
   loadApprovals();
   if (!$("enquiries").hidden) loadEnquiries();
   if (!$("suppliers").hidden) loadSuppliers();
-  if (!$("settings").hidden) loadSettings();
+  if (!$("settings").hidden) { loadSettings(); loadConnections(); }
 }
 refresh();
 setInterval(() => { if (!$("approvals").hidden) loadApprovals(); }, 15000);

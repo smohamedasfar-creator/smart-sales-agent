@@ -27,7 +27,27 @@ function dashboardAuth(password: string) {
   };
 }
 
-export function createApp(coordinator: Coordinator, config: Pick<Config, "whatsapp" | "dashboardPassword">) {
+type AppConfig = Pick<Config, "whatsapp" | "dashboardPassword"> & Partial<Pick<Config, "publicUrl" | "zoho" | "email" | "catalogSource" | "excel">>;
+
+/** What is connected, for the dashboard's Connections card. Never includes a key or password. */
+export function connectionStatus(config: AppConfig) {
+  const wa = config.whatsapp;
+  return {
+    claude: Boolean(process.env.ANTHROPIC_API_KEY?.trim()),
+    whatsapp: {
+      connected: Boolean(wa.accessToken && wa.phoneNumberId),
+      webhookReady: Boolean(wa.appSecret && wa.verifyToken),
+      webhookUrl: `${(config.publicUrl ?? "").replace(/\/$/, "")}/webhook/whatsapp`,
+      followupTemplate: wa.followupTemplate,
+      supplierTemplate: wa.supplierTemplate,
+    },
+    zoho: { connected: Boolean(config.zoho?.enabled), app: config.zoho?.app ?? "books", domain: config.zoho?.domain ?? "zoho.com" },
+    email: { connected: Boolean(config.email?.enabled), from: config.email?.from ?? "" },
+    priceList: config.catalogSource === "zoho" ? "Zoho" : `Excel (${config.excel?.path ?? "data/price-list.xlsx"})`,
+  };
+}
+
+export function createApp(coordinator: Coordinator, config: AppConfig) {
   const { db } = coordinator.ctx;
   const app = express();
   app.use(
@@ -109,6 +129,10 @@ export function createApp(coordinator: Coordinator, config: Pick<Config, "whatsa
   app.post("/api/drafts/:id/reject", (req, res) => {
     coordinator.rejectDraft(Number(req.params.id));
     res.json({ ok: true });
+  });
+
+  app.get("/api/connections", (_req, res) => {
+    res.json(connectionStatus(config));
   });
 
   app.get("/api/settings", (_req, res) => {

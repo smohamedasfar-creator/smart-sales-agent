@@ -176,7 +176,7 @@
         <div class="card">
           <h3>How to try it</h3>
           <ol class="muted" style="margin: 0 0 10px; padding-left: 18px; font-size: 13px">
-            <li>The demo customer is a new number, so the agent asks for name, company and emirate. Answer with the second example whenever you like; the quote waits until you do.</li>
+            <li>The demo customer is a new number, so the agent asks for name, company, emirate and TRN. Answer with the second example whenever you like; the quote waits until you do.</li>
             <li>Send the first example. It has two brands, so the Cosmoplast agent and the Pegler agent each take their items. The elbows and ball valves aren't in stock, so each brand agent asks its own supplier.</li>
             <li>Open <b>Supplier</b> and send a price as Gulf Pipes Trading (elbow), then as Emirates Valves (ball valve).</li>
             <li>Open <b>Approvals</b>, check the quote and send it.</li>
@@ -270,6 +270,20 @@
     <section class="panel" data-p="setup">
       <div class="stack">
         <div class="card">
+          <h2>Connections</h2>
+          <p class="muted">This demo is not connected to anything, so it's safe to try. In the real app these connections are set in the <code>.env</code> file on your server (keys never sit in the web page), and its Settings page shows each one as connected or not.</p>
+          <div class="tablewrap"><table>
+            <tr><th>Service</th><th>What it does</th><th>Where to get the keys</th></tr>
+            <tr><td><b>WhatsApp</b> (Meta)</td><td>Receives customer and supplier messages, sends replies and quotes</td>
+              <td><a href="https://developers.facebook.com/apps" target="_blank" rel="noopener">Meta for Developers</a> → your app → WhatsApp → API setup (phone number ID); a permanent token from <a href="https://business.facebook.com/settings/system-users" target="_blank" rel="noopener">Business settings → System users</a>; templates in <a href="https://business.facebook.com/wa/manage/message-templates/" target="_blank" rel="noopener">WhatsApp Manager</a></td></tr>
+            <tr><td><b>Zoho</b> Books / Inventory</td><td>Live prices and stock; creates the estimate in Zoho</td>
+              <td><a href="https://api-console.zoho.com" target="_blank" rel="noopener">Zoho API Console</a> → Self Client → refresh token, plus your organisation ID</td></tr>
+            <tr><td><b>Claude</b></td><td>The AI agents</td>
+              <td><a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">Anthropic Console → API keys</a></td></tr>
+            <tr><td><b>Email</b></td><td>Price requests to suppliers who use email</td><td>Your mailbox's app password and server names</td></tr>
+          </table></div>
+        </div>
+        <div class="card">
           <h2>Price list</h2>
           <p class="muted">The Price &amp; Stock agent checks every item here: the name, selling price, cost and stock.</p>
           <div class="source" id="source"></div>
@@ -328,21 +342,22 @@ const START = (() => { const d = new Date(); d.setHours(9, 0, 0, 0); return d.ge
 
 /** A number that isn't in your contacts: name, company and emirate still to ask. */
 function newCustomer() {
-  return { id: 1, phone: "971551234567", name: null, company: null, emirate: null, area: null, type: "customer", detailsAsked: false, last_inbound_at: null };
+  return { id: 1, phone: "971551234567", name: null, company: null, emirate: null, area: null, trn: null, trnProblem: null, type: "customer", detailsAsked: false, last_inbound_at: null };
 }
 function knownCustomer() {
-  return { id: 1, phone: "971501234567", name: "Rashid", company: "Al Noor Electricals", emirate: "Dubai", area: "Al Quoz", type: "customer", detailsAsked: true, last_inbound_at: null };
+  return { id: 1, phone: "971501234567", name: "Rashid", company: "Al Noor Electricals", emirate: "Dubai", area: "Al Quoz", trn: "100234567800003", trnProblem: null, type: "customer", detailsAsked: true, last_inbound_at: null };
 }
 
 function freshState() {
   return {
-    v: 4,
+    v: 5,
     now: START,
     nextId: 100, // above the example suppliers' ids
     useClaude: true,
     catalogSource: null, // null = the example list; otherwise { file, sheet }
     settings: {
       businessName: "Al Noor Trading",
+      trn: "", // your own VAT TRN, printed on quotations
       currency: "AED",
       tone: "Polite, warm and professional, like an experienced senior sales and customer service executive. Greet the customer by name, thank them, and use simple, clear English.",
       requireApproval: true,
@@ -387,7 +402,7 @@ function freshState() {
 
 let S = load() || freshState();
 function load() {
-  try { const s = JSON.parse(localStorage.getItem("ssa-demo") || "null"); return s && s.v === 4 ? s : null; } catch { return null; }
+  try { const s = JSON.parse(localStorage.getItem("ssa-demo") || "null"); return s && s.v === 5 ? s : null; } catch { return null; }
 }
 function save() { try { localStorage.setItem("ssa-demo", JSON.stringify(S)); } catch {} }
 const id = () => S.nextId++;
@@ -431,12 +446,29 @@ const EMIRATES = [
 ];
 const emirateIn = (text) => (EMIRATES.find(([, re]) => re.test(text)) || [null])[0];
 const custLabel = () => S.customer.name || S.customer.company || `+${S.customer.phone}`;
-const custFull = () => [S.customer.name || "New customer", S.customer.company, S.customer.emirate && `${S.customer.emirate}${S.customer.area ? ` (${S.customer.area})` : ""}`].filter(Boolean).join(", ");
+const custFull = () => [S.customer.name || "New customer", S.customer.company, S.customer.emirate && `${S.customer.emirate}${S.customer.area ? ` (${S.customer.area})` : ""}`, trnText(S.customer.trn)].filter(Boolean).join(", ");
 function missingDetails() {
   const c = S.customer;
-  return [!c.name && "name", !c.company && "company name", !c.emirate && "emirate (location in the UAE)"].filter(Boolean);
+  return [!c.name && "name", !c.company && "company name", !c.emirate && "emirate (location in the UAE)",
+    !c.trn && (c.trnProblem ? `TRN (it should be 15 digits; the one received was "${c.trnProblem}")` : "TRN (VAT registration number), or let us know if you are not VAT registered")].filter(Boolean);
+}
+const trnText = (t) => (!t ? "" : t === "none" ? "not VAT registered" : `TRN ${t}`);
+/** Reads a TRN answer: 15 digits, "none" for not VAT registered, or the wrong number as given. */
+function readTrn(v) {
+  const text = String(v).trim();
+  if (/^none$|\b(no|not|don'?t have|without)\b.*\b(trn|vat|registered)\b|\bnot vat\b|\bindividual\b/i.test(text)) return { trn: "none" };
+  const digits = text.replace(/[\s-]/g, "").match(/\d+/);
+  if (!digits) return null;
+  return /^\d{15}$/.test(digits[0]) ? { trn: digits[0] } : { problem: digits[0] };
 }
 const listText = (a) => (a.length > 1 ? `${a.slice(0, -1).join(", ")} and ${a[a.length - 1]}` : a[0] || "");
+
+/** True when a message names something from the price list, not just a name, a place or a TRN. */
+function hasProductWords(text) {
+  const STOP = ["this", "from", "are", "for", "with", "our", "the", "and", "sorry", "trn", "vat", "number", "company", "name", "located", "here", "you", "your", "thanks", "thank"];
+  const words = normalize(text).filter((w) => !/\d/.test(w) && w.length >= 3 && !STOP.includes(w) && !emirateIn(w));
+  return S.catalog.some((c) => score(words, c) >= 2);
+}
 
 /** Customer Details agent: picks the name, company and emirate out of the customer's messages. */
 async function updateDetails() {
@@ -444,35 +476,47 @@ async function updateDetails() {
   busy("Customer Details");
   const inbound = S.messages.filter((m) => m.direction === "in").slice(-8);
   const prompt = `You are the Customer Details agent for a trading company in the UAE.
-From the customer's own messages, pick out their name, company name, emirate and area, but only what they actually said.
+From the customer's own messages, pick out their name, company name, emirate, area and TRN (UAE VAT registration number), but only what they actually said.
 Emirate is one of: Abu Dhabi, Dubai, Sharjah, Ajman, Umm Al Quwain, Ras Al Khaimah, Fujairah (Al Ain is in Abu Dhabi). Area is a district or city, e.g. Al Quoz, Mussafah.
-A reply to our question may just list them, e.g. "Ali, ABC Trading, Sharjah".
+A reply to our question may just list them, e.g. "Ali, ABC Trading, Sharjah, 100123456700003".
+TRN: give the number exactly as they wrote it (digits only), or "none" if they say they are not VAT registered or have no TRN.
 ${UNTRUSTED_NOTE}
 
 ${transcript(db.recent(12))}
 
-Reply with only JSON: {"name": null, "company": null, "emirate": null, "area": null} (strings where known).`;
+Reply with only JSON: {"name": null, "company": null, "emirate": null, "area": null, "trn": null} (strings where known).`;
   const r = await askClaude("Customer Details", "json", prompt, () => ruleDetails(inbound.map((m) => m.body)));
   const got = [];
   for (const key of ["name", "company", "emirate", "area"]) {
     const v = r && typeof r[key] === "string" ? r[key].trim() : "";
     if (v && !S.customer[key]) { S.customer[key] = key === "emirate" ? emirateIn(v) || v : v; got.push(`${key}: ${S.customer[key]}`); }
   }
+  const t = r && r.trn != null && String(r.trn).trim() ? readTrn(r.trn) : null;
+  if (t && t.trn && !S.customer.trn) { S.customer.trn = t.trn; S.customer.trnProblem = null; got.push(trnText(t.trn)); }
+  else if (t && t.problem && !S.customer.trn && S.customer.trnProblem !== t.problem) {
+    S.customer.trnProblem = t.problem;
+    S.customer.detailsAsked = false; // ask again, politely
+    got.push(`TRN "${t.problem}" is ${t.problem.length} digits, not 15; asking the customer to check it`);
+  }
   if (got.length) log("Customer Details", `Saved ${got.join(", ")}.${missingDetails().length ? ` Still needed: ${listText(missingDetails())}.` : " All details known."}`);
   return got.length > 0;
 }
 function ruleDetails(texts) {
-  const out = { name: null, company: null, emirate: null, area: null };
+  const out = { name: null, company: null, emirate: null, area: null, trn: null };
   for (const t of texts) {
     const name = t.match(/\b(?:my name is|this is|i am|i'm|name\s*[:\-])\s+([a-z][a-z.'-]*(?:\s+[a-z][a-z.'-]*)?)/i);
     if (name && !emirateIn(name[1]) && !/^(looking|interested|searching|asking|need|not|in|at|the|a|an|from|here|ok|fine|good)\b/i.test(name[1])) out.name = name[1].replace(/\s+(from|of|at|here)$/i, "");
     const company = t.match(/\b(?:from|company(?:\s+name)?(?:\s+is)?\s*[:\-]?|with)\s+([a-z0-9&.' -]{2,40}?)(?=[,.\n]|\s+(?:in|at|located|we)\b|$)/i);
     if (company && !emirateIn(company[1])) out.company = company[1].trim();
     out.emirate = emirateIn(t) || out.emirate;
+    const trn = t.match(/\b(?:trn|tax registration|vat(?: number| no\.?| reg(?:istration)?)?)\b[^\d\n]{0,15}(\d[\d\s-]{5,22}\d)/i) || t.match(/\b(1\d{14})\b/);
+    if (trn) out.trn = trn[1];
+    if (/\b(no|not|don'?t have|without)\b[^.\n]*\b(trn|vat|registered)\b|\bnot vat\b/i.test(t)) out.trn = "none";
     // A plain answer to our question: "Ali, ABC Trading, Sharjah"
     const parts = t.split(/[,\n]/).map((x) => x.trim()).filter(Boolean);
-    if (parts.length >= 2 && parts.length <= 4 && !/\d/.test(t) && parts.every((x) => x.split(/\s+/).length <= 5)) {
-      const rest = parts.filter((x) => !emirateIn(x));
+    const words = parts.filter((x) => !/^[\d\s-]+$/.test(x)); // a TRN on its own is fine
+    if (parts.length >= 2 && parts.length <= 5 && words.every((x) => !/\d/.test(x) && x.split(/\s+/).length <= 5)) {
+      const rest = words.filter((x) => !emirateIn(x) && !/\b(trn|vat)\b/i.test(x));
       if (!out.name && rest[0]) out.name = rest[0].replace(/^(hi|hello|salam)\s+/i, "");
       if (!out.company && rest[1]) out.company = rest[1];
     }
@@ -639,6 +683,7 @@ Classify the customer's latest message (the last "Customer" lines of the convers
 - decline_quote: says no to the quote, or that they bought elsewhere.
 - question: asks about something else (delivery, payment, location, an item in the quote) without changing the products.
 - human_request: asks to talk to a person, or is angry or complaining.
+- Messages that only give the customer's name, company, location or TRN are "other".
 - personal: a personal or social message from family, friends or someone the owner knows (family news, invitations, jokes, "how are you bro"), not about buying anything.
 - other: greetings, thanks and anything else.
 ${UNTRUSTED_NOTE}
@@ -968,7 +1013,9 @@ function createQuote(enquiry, priced) {
   busy("Estimate");
   const ref = enquiry.quote_ref || db.nextQuoteNumber();
   const st = S.settings;
-  const parts = [`*Quotation ${ref}*`, st.businessName, `To: ${custFull()}`, ""];
+  const c = S.customer;
+  const to = [c.name, c.company, c.emirate && `${c.emirate}${c.area ? ` (${c.area})` : ""}`].filter(Boolean).join(", ");
+  const parts = [`*Quotation ${ref}*`, st.businessName + (st.trn ? ` · TRN ${st.trn}` : ""), `To: ${to || `+${c.phone}`}`, c.trn && c.trn !== "none" ? `Customer TRN: ${c.trn}` : null, ""].filter((x) => x !== null);
   const brands = [...new Set(priced.lines.map((l) => l.brand))];
   let n = 0;
   for (const b of brands) {
@@ -1044,7 +1091,9 @@ async function handleCustomer() {
     return;
   }
   try {
-    const intent = await classify(enquiry);
+    let intent = await classify(enquiry);
+    const lastText = S.messages.filter((m) => m.direction === "in").slice(-1)[0].body;
+    if ((intent === "add_details" || intent === "new_enquiry") && missingDetails().length && !hasProductWords(lastText)) intent = "other"; // just the customer's details
     log("Coordinator", `Customer's message: ${intent.replace("_", " ")}.`);
     if (intent === "personal") {
       // Looks like family or a friend: stay quiet and let the owner decide.
@@ -1320,7 +1369,7 @@ const dayLabel = (t) => `Day ${Math.floor((t - START) / (24 * HOUR)) + 1}`;
 
 const AGENTS = [
   ["Coordinator", "Reads each message and passes the work on"],
-  ["Customer Details", "Gets name, company and emirate from new customers"],
+  ["Customer Details", "Gets name, company, emirate and TRN from new customers"],
   ["WhatsApp Reception", "Writes every reply to the customer"],
   ["Requirement Gatherer", "Turns the chat into an item list"],
   ["Price & Stock", "Checks price and stock in Excel or Zoho"],
@@ -1333,7 +1382,7 @@ const STEPS = [["gathering", "Gathering"], ["checking", "Checking prices"], ["wa
 
 const CUSTOMER_TRIES = [
   "Hi, I need price for 50 pcs 4 inch PVC pipe Cosmoplast, 10 elbows 4 inch and 2 Pegler ball valves 1 inch",
-  "This is Ali from Gulf Star Contracting, we are in Sharjah",
+  "This is Ali from Gulf Star Contracting, we are in Sharjah. Our TRN is 100345678900003",
   "Also add 2 gate valves 2 inch",
   "Price for 5 Hepworth elbows 4 inch",
   "Do you deliver to Sharjah?",
@@ -1360,7 +1409,7 @@ function customerTries() {
   const third = inStock[2] || inStock[0];
   return [
     `Hi, please quote ${first.join(", ")}`,
-    "This is Ali from Gulf Star Contracting, we are in Sharjah",
+    "This is Ali from Gulf Star Contracting, we are in Sharjah. Our TRN is 100345678900003",
     third ? `Also add 1 x ${short(third)}` : null,
     "What is the delivery time?",
     "Yes, confirm the order",
@@ -1736,9 +1785,10 @@ function renderSetup() {
   const bind = (obj, key, type = "text") => el("input", { type, value: obj[key], step: type === "number" ? "any" : null, onchange: (ev) => { obj[key] = type === "number" ? Number(ev.target.value) || 0 : ev.target.value; save(); render(); } });
   put($("#settings"), 
     field("Business name", bind(st, "businessName")),
+    field("Your TRN (on quotations)", bind(st, "trn")),
     field("Demo customer (changing it starts a new chat)", el("select", { onchange: (ev) => switchCustomer(ev.target.value) },
       el("option", { value: "new", selected: !S.customer.detailsAsked || !S.customer.name || S.customer.phone === newCustomer().phone }, "New number, not in your contacts"),
-      el("option", { value: "known", selected: S.customer.phone === knownCustomer().phone }, "Known customer: Rashid, Al Noor Electricals, Dubai"))),
+      el("option", { value: "known", selected: S.customer.phone === knownCustomer().phone }, "Known customer: Rashid, Al Noor Electricals, Dubai, with TRN"))),
     field("The demo customer is", el("select", { onchange: (ev) => { S.customer.type = ev.target.value; save(); render(); } },
       el("option", { value: "customer", selected: S.customer.type !== "reseller" }, "An end customer (customer price)"),
       el("option", { value: "reseller", selected: S.customer.type === "reseller" }, "A reseller (reseller price)"))),
@@ -1751,7 +1801,7 @@ function renderSetup() {
     field("Quote valid (days)", bind(st, "quoteValidityDays", "number")),
     field("Remind slow supplier after (hours)", bind(st, "supplierReminderHours", "number")),
     field("Skip slow supplier after (hours)", bind(st, "supplierGiveUpHours", "number")),
-    el("label", { class: "check" }, el("input", { type: "checkbox", checked: st.requireDetails, onchange: (ev) => { st.requireDetails = ev.target.checked; save(); } }), "Send quotes only after the customer's name, company and emirate are known"),
+    el("label", { class: "check" }, el("input", { type: "checkbox", checked: st.requireDetails, onchange: (ev) => { st.requireDetails = ev.target.checked; save(); } }), "Send quotes only after the customer's name, company, emirate and TRN are known"),
     el("label", { class: "check" }, el("input", { type: "checkbox", checked: st.requireApproval, onchange: (ev) => { st.requireApproval = ev.target.checked; save(); } }), "Quotes wait for my approval"),
     el("label", { class: "check" }, el("input", { type: "checkbox", checked: S.useClaude, onchange: (ev) => { S.useClaude = ev.target.checked; save(); render(); } }), "Use Claude for the AI agents"),
     field("Tone of replies", el("textarea", { rows: 2, onchange: (ev) => { st.tone = ev.target.value; save(); } }, st.tone)),

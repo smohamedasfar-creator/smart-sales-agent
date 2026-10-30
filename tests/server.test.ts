@@ -94,4 +94,15 @@ describe("dashboard", () => {
     const saved = await (await fetch(`${base}/api/settings`, { headers })).json();
     expect(saved.margin).toMatchObject({ defaultPercent: 22, priceBasis: "list" });
   });
+
+  it("shows what is connected without giving away any key", async () => {
+    const { base } = await start();
+    const headers = { Authorization: `Basic ${Buffer.from("owner:pw").toString("base64")}` };
+    const text = await (await fetch(`${base}/api/connections`, { headers })).text();
+    const status = JSON.parse(text);
+    expect(status.whatsapp).toMatchObject({ connected: false, webhookReady: true });
+    expect(status.zoho.connected).toBe(false);
+    expect(text).not.toContain(SECRET);
+    expect(text).not.toContain("verify-me");
+  });
 });
