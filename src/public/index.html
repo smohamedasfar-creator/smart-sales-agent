@@ -176,9 +176,12 @@ document.querySelectorAll("nav button").forEach((button) => button.addEventListe
 }));
 
 async function loadApprovals() {
-  const drafts = await api("/drafts");
+  const [drafts, alerts] = await Promise.all([api("/drafts"), api("/alerts")]);
   $("approval-count").textContent = drafts.length ? `(${drafts.length})` : "";
-  $("approvals").innerHTML = drafts.length === 0
+  const alertCard = `<div class="card"><strong>Alerts</strong>
+    ${alerts.length ? `<table>${alerts.map((a) => `<tr><td class="muted" style="white-space:nowrap">${new Date(a.created_at).toLocaleString()}</td><td>${esc(a.text)}</td></tr>`).join("")}</table>`
+      : `<p class="muted">Nothing yet. New quotes, orders, new customers and anything that needs you appear here.</p>`}</div>`;
+  $("approvals").innerHTML = (drafts.length === 0
     ? `<div class="card muted">Nothing is waiting for approval.</div>`
     : drafts.map((d) => `
       <div class="card">
@@ -189,7 +192,7 @@ async function loadApprovals() {
           <button class="primary" onclick="approve(${d.id})">Approve and send</button>
           <button class="secondary danger" onclick="reject(${d.id})">Reject (I'll handle it)</button>
         </p>
-      </div>`).join("");
+      </div>`).join("")) + alertCard;
 }
 async function approve(id) { await api(`/drafts/${id}/approve`, { method: "POST", body: { body: $(`draft-${id}`).value } }); refresh(); }
 async function reject(id) { await api(`/drafts/${id}/reject`, { method: "POST" }); refresh(); }

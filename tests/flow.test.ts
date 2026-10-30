@@ -230,6 +230,8 @@ describe("enquiry to order", () => {
     expect(t.whatsapp.sent.filter((m) => m.to === CUSTOMER)).toHaveLength(0);
     expect(t.db.listEnquiries()).toHaveLength(0);
     expect(t.whatsapp.sent.find((m) => m.to === OWNER)!.body).toContain("looks personal");
+    // Alerts are also kept for the dashboard, so no second WhatsApp number is needed.
+    expect(t.db.alerts()[0].text).toContain("looks personal");
 
     // Once the owner marks them as personal, they leave the customer list.
     t.db.forgetCustomer(CUSTOMER);

@@ -8,9 +8,9 @@ and you scan a QR code with it.
 - [ ] Update the **WhatsApp Business app** on your phone to the latest version.
 - [ ] Open **business.facebook.com** in your browser and check you can see your business (Meta Business account).
 - [ ] Have a **payment card** ready: the server (about USD 5 a month), Claude usage, and possibly the Meta partner.
-- [ ] Decide which number gets **owner alerts** (new quotes to approve, orders, new customers). With your business
-      number shared with the app, alerts can't go to that same number: use your personal WhatsApp number, or leave it
-      empty and check the dashboard.
+- Owner alerts (new quotes to approve, orders, new customers, a customer asking for a person) appear on the
+  dashboard's **Approvals** page. No second WhatsApp number is needed. If you ever want them on WhatsApp as well, put
+  a different number (not the business number) in `OWNER_PHONE`.
 
 ## 1. Claude key (5 minutes)
 
@@ -25,8 +25,8 @@ The app runs on a server that is on day and night, with an https address. **Rail
    (I'll first move the work onto the repo's main branch, or we pick the branch `claude/sweet-noether-5qzf4e`.)
 2. **Add a volume** mounted at `/app/data` (it keeps the database and your price list).
 3. **Variables**: `DASHBOARD_PASSWORD` (a strong password of your own), `ANTHROPIC_API_KEY` (step 1),
-   `PUBLIC_URL` (the address Railway gives, under Settings → Networking → Generate domain), `OWNER_PHONE`
-   (see above, country code and no +). The WhatsApp values come in step 4.
+   `PUBLIC_URL` (the address Railway gives, under Settings → Networking → Generate domain). The WhatsApp values
+   come in step 4.
 4. Open the address, log in with any user name and your password. **Settings → Price list → Upload** your stock list.
 5. In **Test chat**, write as a customer ("Hi, I need 10 UGREEN HDMI cable"). The agents answer in Enquiries, and
    the quote waits in Approvals. Nothing goes to WhatsApp yet.

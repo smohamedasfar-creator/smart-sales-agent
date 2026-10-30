@@ -435,8 +435,10 @@ export class Coordinator {
     if (text) await this.send(customer, enquiry?.id ?? null, text);
   }
 
+  /** Tells the owner: always on the dashboard's Alerts list, and on WhatsApp too when OWNER_PHONE is set. */
   private async notifyOwner(text: string): Promise<void> {
     this.ctx.log(`Owner: ${text}`);
+    this.ctx.db.addAlert(text);
     if (!this.ctx.ownerPhone) return;
     try {
       await this.ctx.whatsapp.sendText(this.ctx.ownerPhone, text);

@@ -223,6 +223,10 @@ export function createApp(coordinator: Coordinator, config: AppConfig) {
     }
   });
 
+  app.get("/api/alerts", (_req, res) => {
+    res.json(db.alerts());
+  });
+
   app.get("/api/orders", (req, res) => {
     res.json(db.orders(typeof req.query.brand === "string" && req.query.brand ? req.query.brand : undefined));
   });

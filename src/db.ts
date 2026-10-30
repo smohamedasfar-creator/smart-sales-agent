@@ -309,6 +309,11 @@ CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS alerts (
+  id INTEGER PRIMARY KEY,
+  text TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS orders (
   id INTEGER PRIMARY KEY,
   ref TEXT NOT NULL,
@@ -678,6 +683,16 @@ export class Db {
     } else {
       this.run("UPDATE supplier_requests SET status = ? WHERE id = ?", status, id);
     }
+  }
+
+  // Alerts to the owner, shown on the dashboard (and sent on WhatsApp when OWNER_PHONE is set)
+
+  addAlert(text: string): void {
+    this.run("INSERT INTO alerts (text, created_at) VALUES (?, ?)", text, this.iso());
+  }
+
+  alerts(limit = 50): { id: number; text: string; created_at: string }[] {
+    return this.all("SELECT * FROM alerts ORDER BY id DESC LIMIT ?", limit);
   }
 
   // Orders, one per brand of an accepted quote
