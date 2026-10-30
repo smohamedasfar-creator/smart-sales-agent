@@ -176,6 +176,7 @@
         <div class="card">
           <h3>How to try it</h3>
           <ol class="muted" style="margin: 0 0 10px; padding-left: 18px; font-size: 13px">
+            <li>The demo customer is a new number, so the agent asks for name, company and emirate. Answer with the second example whenever you like; the quote waits until you do.</li>
             <li>Send the first example. It has two brands, so the Cosmoplast agent and the Pegler agent each take their items. The elbows and ball valves aren't in stock, so each brand agent asks its own supplier.</li>
             <li>Open <b>Supplier</b> and send a price as Gulf Pipes Trading (elbow), then as Emirates Valves (ball valve).</li>
             <li>Open <b>Approvals</b>, check the quote and send it.</li>
@@ -197,6 +198,7 @@
         </div>
         <div class="card">
           <div class="row" style="justify-content: space-between"><h3>Current enquiry</h3><span class="muted" id="enq-ref"></span></div>
+          <div id="cust" class="muted" style="margin-bottom: 8px"></div>
           <div class="steps" id="steps"></div>
           <div id="human" style="margin-top: 8px"></div>
           <div class="tablewrap" style="margin-top: 10px"><table id="items"></table></div>
@@ -324,9 +326,17 @@
 const HOUR = 3600000;
 const START = (() => { const d = new Date(); d.setHours(9, 0, 0, 0); return d.getTime(); })();
 
+/** A number that isn't in your contacts: name, company and emirate still to ask. */
+function newCustomer() {
+  return { id: 1, phone: "971551234567", name: null, company: null, emirate: null, area: null, type: "customer", detailsAsked: false, last_inbound_at: null };
+}
+function knownCustomer() {
+  return { id: 1, phone: "971501234567", name: "Rashid", company: "Al Noor Electricals", emirate: "Dubai", area: "Al Quoz", type: "customer", detailsAsked: true, last_inbound_at: null };
+}
+
 function freshState() {
   return {
-    v: 3,
+    v: 4,
     now: START,
     nextId: 100, // above the example suppliers' ids
     useClaude: true,
@@ -336,6 +346,7 @@ function freshState() {
       currency: "AED",
       tone: "Polite, warm and professional, like an experienced senior sales and customer service executive. Greet the customer by name, thank them, and use simple, clear English.",
       requireApproval: true,
+      requireDetails: true, // quotes go out only once name, company and emirate are known
       margin: { priceBasis: "list", defaultPercent: 15, byBrand: { Pegler: 20 }, byCategory: {}, byCustomer: {}, roundTo: 0 },
       taxPercent: 5,
       quoteValidityDays: 7,
@@ -362,7 +373,7 @@ function freshState() {
     // Family, friends and others the agents never answer; they never become customers.
     personal: [{ phone: "971509990001", name: "Ahmed (brother)" }],
     personalChats: {},
-    customer: { id: 1, phone: "971501234567", name: "Rashid", type: "customer", last_inbound_at: null },
+    customer: newCustomer(),
     catalogNotes: "",
     messages: [],
     enquiries: [],
@@ -376,7 +387,7 @@ function freshState() {
 
 let S = load() || freshState();
 function load() {
-  try { const s = JSON.parse(localStorage.getItem("ssa-demo") || "null"); return s && s.v === 3 ? s : null; } catch { return null; }
+  try { const s = JSON.parse(localStorage.getItem("ssa-demo") || "null"); return s && s.v === 4 ? s : null; } catch { return null; }
 }
 function save() { try { localStorage.setItem("ssa-demo", JSON.stringify(S)); } catch {} }
 const id = () => S.nextId++;
@@ -386,7 +397,7 @@ const iso = () => new Date(S.now).toISOString();
 // Memory (the real app keeps this in SQLite)
 // ---------------------------------------------------------------------------
 
-const OPEN = ["gathering", "checking", "waiting_supplier", "awaiting_approval", "quoted", "needs_human"];
+const OPEN = ["gathering", "checking", "waiting_supplier", "awaiting_details", "awaiting_approval", "quoted", "needs_human"];
 const db = {
   openEnquiry: () => [...S.enquiries].reverse().find((e) => OPEN.includes(e.status)),
   latestEnquiry: () => S.enquiries[S.enquiries.length - 1],
@@ -412,6 +423,62 @@ const db = {
 };
 
 function log(agent, text) { S.log.push({ at: S.now, agent, text }); }
+
+// Customer details: a new number must give name, company and emirate before a quote goes out.
+const EMIRATES = [
+  ["Abu Dhabi", /\b(abu ?dhabi|al ain|auh)\b/i], ["Dubai", /\b(dubai|dxb)\b/i], ["Sharjah", /\b(sharjah|shj)\b/i],
+  ["Ajman", /\bajman\b/i], ["Umm Al Quwain", /\b(umm al ?q[a-z]+|uaq)\b/i], ["Ras Al Khaimah", /\b(ras al ?khaimah|rak)\b/i], ["Fujairah", /\bfujairah\b/i],
+];
+const emirateIn = (text) => (EMIRATES.find(([, re]) => re.test(text)) || [null])[0];
+const custLabel = () => S.customer.name || S.customer.company || `+${S.customer.phone}`;
+const custFull = () => [S.customer.name || "New customer", S.customer.company, S.customer.emirate && `${S.customer.emirate}${S.customer.area ? ` (${S.customer.area})` : ""}`].filter(Boolean).join(", ");
+function missingDetails() {
+  const c = S.customer;
+  return [!c.name && "name", !c.company && "company name", !c.emirate && "emirate (location in the UAE)"].filter(Boolean);
+}
+const listText = (a) => (a.length > 1 ? `${a.slice(0, -1).join(", ")} and ${a[a.length - 1]}` : a[0] || "");
+
+/** Customer Details agent: picks the name, company and emirate out of the customer's messages. */
+async function updateDetails() {
+  if (!missingDetails().length) return false;
+  busy("Customer Details");
+  const inbound = S.messages.filter((m) => m.direction === "in").slice(-8);
+  const prompt = `You are the Customer Details agent for a trading company in the UAE.
+From the customer's own messages, pick out their name, company name, emirate and area, but only what they actually said.
+Emirate is one of: Abu Dhabi, Dubai, Sharjah, Ajman, Umm Al Quwain, Ras Al Khaimah, Fujairah (Al Ain is in Abu Dhabi). Area is a district or city, e.g. Al Quoz, Mussafah.
+A reply to our question may just list them, e.g. "Ali, ABC Trading, Sharjah".
+${UNTRUSTED_NOTE}
+
+${transcript(db.recent(12))}
+
+Reply with only JSON: {"name": null, "company": null, "emirate": null, "area": null} (strings where known).`;
+  const r = await askClaude("Customer Details", "json", prompt, () => ruleDetails(inbound.map((m) => m.body)));
+  const got = [];
+  for (const key of ["name", "company", "emirate", "area"]) {
+    const v = r && typeof r[key] === "string" ? r[key].trim() : "";
+    if (v && !S.customer[key]) { S.customer[key] = key === "emirate" ? emirateIn(v) || v : v; got.push(`${key}: ${S.customer[key]}`); }
+  }
+  if (got.length) log("Customer Details", `Saved ${got.join(", ")}.${missingDetails().length ? ` Still needed: ${listText(missingDetails())}.` : " All details known."}`);
+  return got.length > 0;
+}
+function ruleDetails(texts) {
+  const out = { name: null, company: null, emirate: null, area: null };
+  for (const t of texts) {
+    const name = t.match(/\b(?:my name is|this is|i am|i'm|name\s*[:\-])\s+([a-z][a-z.'-]*(?:\s+[a-z][a-z.'-]*)?)/i);
+    if (name && !emirateIn(name[1]) && !/^(looking|interested|searching|asking|need|not|in|at|the|a|an|from|here|ok|fine|good)\b/i.test(name[1])) out.name = name[1].replace(/\s+(from|of|at|here)$/i, "");
+    const company = t.match(/\b(?:from|company(?:\s+name)?(?:\s+is)?\s*[:\-]?|with)\s+([a-z0-9&.' -]{2,40}?)(?=[,.\n]|\s+(?:in|at|located|we)\b|$)/i);
+    if (company && !emirateIn(company[1])) out.company = company[1].trim();
+    out.emirate = emirateIn(t) || out.emirate;
+    // A plain answer to our question: "Ali, ABC Trading, Sharjah"
+    const parts = t.split(/[,\n]/).map((x) => x.trim()).filter(Boolean);
+    if (parts.length >= 2 && parts.length <= 4 && !/\d/.test(t) && parts.every((x) => x.split(/\s+/).length <= 5)) {
+      const rest = parts.filter((x) => !emirateIn(x));
+      if (!out.name && rest[0]) out.name = rest[0].replace(/^(hi|hello|salam)\s+/i, "");
+      if (!out.company && rest[1]) out.company = rest[1];
+    }
+  }
+  return out;
+}
 const splitList = (text) => String(text || "").split(",").map((x) => x.trim()).filter(Boolean);
 const NO_BRAND = "No brand";
 const brandOf = (item) => item.brand || NO_BRAND;
@@ -467,7 +534,7 @@ async function askClaude(agent, kind, prompt, fallback) {
 }
 
 function transcript(messages) {
-  const who = `Customer (${S.customer.name})`;
+  const who = `Customer (${custLabel()})`;
   return `<conversation>\n${messages.map((m) => `${m.direction === "in" ? who : "Us"}: ${m.body}`).join("\n")}\n</conversation>`;
 }
 const money = (n) => `${S.settings.currency} ${Number(n).toFixed(2)}`;
@@ -854,7 +921,7 @@ async function writeReply(enquiry, task, facts, kind) {
   const prompt = `You are a senior sales and customer service executive for ${S.settings.businessName}, answering on WhatsApp.
 Tone: ${S.settings.tone}
 How you work:
-- Be polite and courteous at all times: greet the customer by name, thank them, and close warmly.
+- Be polite and courteous at all times: greet the customer by name when you know it, thank them, and close warmly.
 - Show you understood: briefly confirm what they asked for before asking anything.
 - When you need details, ask clear questions and give the choices we stock, numbered, so the customer can answer in one word. Ask only what you need for the quote.
 - If something is not available, apologise and offer the in-stock alternative from the facts, if there is one.
@@ -869,23 +936,30 @@ ${UNTRUSTED_NOTE}
 
 ${transcript(db.recent(20))}
 
+Customer: ${custFull()}${missingDetails().length ? ` (still unknown: ${listText(missingDetails())})` : ""}.
 ${enquiry ? `Current enquiry status: ${enquiry.status}${enquiry.quote_ref ? `, quote ${enquiry.quote_ref}` : ""}.` : ""}
 ${facts ? `<facts>\n${facts}\n</facts>\n` : ""}
 Your task: ${task}`;
   return askClaude("WhatsApp Reception", "text", prompt, () => ruleReply(kind, facts));
 }
 function ruleReply(kind, facts) {
-  const name = S.customer.name;
+  const n = S.customer.name ? ` ${S.customer.name}` : "";
+  const ty = `Thank you${n ? `,${n}` : ""}`;
   switch (kind) {
-    case "ask_items": return `Hello ${name}, thank you for contacting ${S.settings.businessName}. Kindly share the products, models and quantities you need, and I'll prepare your quotation right away.`;
-    case "questions": return `Thank you, ${name}. To make sure I quote exactly the right items, could you please confirm:\n${facts.split("Questions:\n")[1] || ""}`;
-    case "waiting": return `Thank you, ${name}. I'm preparing your quotation now and will share it with you shortly.`;
-    case "human": return `Certainly, ${name}. A member of our team will contact you shortly. Thank you for your patience.`;
-    case "declined": return `Thank you for letting us know, ${name}. We'll be glad to help whenever you need anything.`;
-    case "accepted": return `Thank you for your order, ${name}! It's confirmed, and our team will contact you shortly to arrange delivery.`;
-    case "cannot_price": return `Thank you, ${name}. I'll get back to you shortly with the details for these items.`;
-    case "question": return `Thank you for asking, ${name}. Let me check with our team and reply to you shortly.`;
-    default: return `Hello ${name}, thank you for your message. How may I help you today? Kindly share the products and quantities you need, and I'll prepare your quotation.`;
+    case "ask_items": return `Hello${n}, thank you for contacting ${S.settings.businessName}. Kindly share the products, models and quantities you need, and I'll prepare your quotation right away.`;
+    case "questions": return `${ty}. To make sure I quote exactly the right items, could you please confirm:\n${facts.split("Questions:\n")[1] || ""}`;
+    case "waiting": return `${ty}. I'm preparing your quotation now and will share it with you shortly.`;
+    case "need_details": return `${ty}. Your quotation is almost ready. To finalise it, may I please have your ${listText(missingDetails())}?`;
+    case "details_thanks": {
+      const more = missingDetails().length ? ` May I also have your ${listText(missingDetails())}?` : "";
+      return `${ty}. Your details are noted.${more}${db.openEnquiry() ? " Your quotation will follow shortly." : " Which products may I quote for you?"}`;
+    }
+    case "human": return `Certainly${n}. A member of our team will contact you shortly. Thank you for your patience.`;
+    case "declined": return `Thank you for letting us know${n}. We'll be glad to help whenever you need anything.`;
+    case "accepted": return `Thank you for your order${n}! It's confirmed, and our team will contact you shortly to arrange delivery.`;
+    case "cannot_price": return `${ty}. I'll get back to you shortly with the details for these items.`;
+    case "question": return `Thank you for asking${n}. Let me check with our team and reply to you shortly.`;
+    default: return `Hello${n}, thank you for your message. How may I help you today? Kindly share the products and quantities you need, and I'll prepare your quotation.`;
   }
 }
 
@@ -894,7 +968,7 @@ function createQuote(enquiry, priced) {
   busy("Estimate");
   const ref = enquiry.quote_ref || db.nextQuoteNumber();
   const st = S.settings;
-  const parts = [`*Quotation ${ref}*`, st.businessName, ""];
+  const parts = [`*Quotation ${ref}*`, st.businessName, `To: ${custFull()}`, ""];
   const brands = [...new Set(priced.lines.map((l) => l.brand))];
   let n = 0;
   for (const b of brands) {
@@ -923,7 +997,12 @@ function serial(job) {
 }
 
 async function reply(enquiry, task, facts, kind) {
-  const text = await writeReply(enquiry, task, facts || "", kind);
+  const missing = missingDetails();
+  const askNow = missing.length && !S.customer.detailsAsked && !["human", "declined", "need_details"].includes(kind);
+  if (askNow) task += ` This is a new customer: at the end, also politely ask for their ${listText(missing)}, so we can prepare the quotation and arrange delivery.`;
+  let text = await writeReply(enquiry, task, facts || "", kind);
+  if (askNow && text && !usingClaude()) text += `\n\nMay I also have your ${listText(missing)}, please?`;
+  if (askNow || kind === "need_details") S.customer.detailsAsked = true;
   if (text) { db.addOut(enquiry ? enquiry.id : null, text); log("WhatsApp Reception", "Replied to the customer."); }
 }
 function notifyOwner(text, action) { S.log.push({ at: S.now, agent: "Owner alert", text, action }); }
@@ -934,9 +1013,9 @@ let sender = "customer"; // "customer" or a personal contact's phone
 /** Moves the demo customer to personal contacts and takes their chat off the customer side (unless they have an enquiry). */
 function markPersonal() {
   if (personalContact(S.customer.phone)) return;
-  S.personal.push({ phone: S.customer.phone, name: S.customer.name });
+  S.personal.push({ phone: S.customer.phone, name: S.customer.name || `+${S.customer.phone}` });
   if (!S.enquiries.length) { S.personalChats[S.customer.phone] = S.messages.map((m) => ({ direction: m.direction, body: m.body, at: m.at })); S.messages = []; }
-  log("Owner", `Added ${S.customer.name} to personal contacts. The agents won't answer them.`);
+  log("Owner", `Added ${custLabel()} to personal contacts. The agents won't answer them.`);
   save(); renderSetup(); render();
 }
 
@@ -969,15 +1048,26 @@ async function handleCustomer() {
     log("Coordinator", `Customer's message: ${intent.replace("_", " ")}.`);
     if (intent === "personal") {
       // Looks like family or a friend: stay quiet and let the owner decide.
-      notifyOwner(`${S.customer.name} sent a message that looks personal, so the agents didn't reply.`, "personal");
+      notifyOwner(`${custLabel()} sent a message that looks personal, so the agents didn't reply.`, "personal");
       return;
+    }
+    const savedDetails = await updateDetails();
+    if (enquiry && enquiry.status === "awaiting_details" && intent !== "new_enquiry" && intent !== "add_details" && intent !== "human_request") {
+      db.attach(enquiry.id);
+      if (missingDetails().length) return await reply(enquiry, `Thank the customer and politely ask for their ${listText(missingDetails())} so we can finalise the quotation.`, "", "need_details");
+      log("Coordinator", "Customer details complete; finishing the quotation.");
+      return await quote(enquiry);
+    }
+    if (savedDetails && intent === "other") {
+      if (enquiry) db.attach(enquiry.id);
+      return await reply(enquiry, `Thank the customer for their details.${missingDetails().length ? ` Politely ask for their ${listText(missingDetails())} too.` : ""}${enquiry ? " Say their quotation will follow shortly." : " Ask which products they need."}`, "", "details_thanks");
     }
     if (intent === "human_request") {
       enquiry = enquiry || db.createEnquiry();
       db.attach(enquiry.id);
       db.setStatus(enquiry.id, "needs_human", "Customer asked for a person");
       await reply(enquiry, "Tell the customer a member of our team will contact them shortly.", "", "human");
-      notifyOwner(`${S.customer.name} wants to talk to a person (enquiry E${enquiry.id}).`);
+      notifyOwner(`${custLabel()} wants to talk to a person (enquiry E${enquiry.id}).`);
       return;
     }
     if (enquiry && enquiry.status === "quoted" && intent === "accept_quote") return await accept(enquiry);
@@ -1005,7 +1095,7 @@ async function handleCustomer() {
     db.attach(enquiry.id);
     db.setStatus(enquiry.id, "needs_human", `Agent error: ${e.message}`);
     log("Coordinator", `Stopped: ${e.message}`);
-    notifyOwner(`The agents could not handle a message from ${S.customer.name} (E${enquiry.id}). Please reply yourself.`);
+    notifyOwner(`The agents could not handle a message from ${custLabel()} (E${enquiry.id}). Please reply yourself.`);
   }
 }
 
@@ -1052,6 +1142,12 @@ async function runCheck(enquiry) {
 }
 
 async function quote(enquiry) {
+  if (S.settings.requireDetails && missingDetails().length) {
+    db.setStatus(enquiry.id, "awaiting_details");
+    log("Customer Details", `The quotation waits for the customer's ${listText(missingDetails())}.`);
+    await reply(enquiry, `Thank the customer. Tell them the quotation is almost ready, and politely ask for their ${listText(missingDetails())} to finalise it. Do not mention suppliers or stock.`, "", "need_details");
+    return;
+  }
   busy("Pricing & Margin");
   const priced = priceItems(db.items(enquiry.id));
   log("Pricing & Margin", priced.lines.length
@@ -1067,7 +1163,7 @@ async function quote(enquiry) {
   if (S.settings.requireApproval) {
     S.drafts.push({ id: id(), enquiry_id: enquiry.id, kind: "quote", body: q.body, status: "pending" });
     db.setStatus(enquiry.id, "awaiting_approval");
-    notifyOwner(`Quote ${q.ref} for ${S.customer.name} (${money(q.total)}) is waiting for your approval.`);
+    notifyOwner(`Quote ${q.ref} for ${custFull()} (${money(q.total)}) is waiting for your approval.`);
     return;
   }
   db.addOut(enquiry.id, q.body);
@@ -1090,13 +1186,13 @@ async function accept(enquiry) {
   for (const brand of [...new Set(priced.lines.map((l) => l.brand))]) {
     const lines = priced.lines.filter((l) => l.brand === brand);
     const subtotal = round2(lines.reduce((t, l) => t + l.lineTotal, 0));
-    const order = { id: `SO-${String(S.orders.length + 1).padStart(4, "0")}`, enquiry_id: enquiry.id, quote_ref: enquiry.quote_ref, customer: S.customer.name, brand, lines, subtotal, at: S.now, status: "confirmed" };
+    const order = { id: `SO-${String(S.orders.length + 1).padStart(4, "0")}`, enquiry_id: enquiry.id, quote_ref: enquiry.quote_ref, customer: custFull(), brand, lines, subtotal, at: S.now, status: "confirmed" };
     S.orders.push(order);
     made.push(order);
     busy(brandAgent(brand));
     log(brandAgent(brand), `Order ${order.id}: ${lines.map((l) => `${l.quantity} x ${l.name}`).join(", ")} = ${money(subtotal)} before VAT.`);
   }
-  notifyOwner(`Order confirmed: ${S.customer.name} accepted quote ${enquiry.quote_ref} (${money(enquiry.quote_total || 0)}). By brand: ${made.map((o) => `${o.brand} ${o.id} ${money(o.subtotal)}`).join("; ")}.`);
+  notifyOwner(`Order confirmed: ${custFull()} accepted quote ${enquiry.quote_ref} (${money(enquiry.quote_total || 0)}). By brand: ${made.map((o) => `${o.brand} ${o.id} ${money(o.subtotal)}`).join("; ")}.`);
 }
 
 function facts(enquiry) {
@@ -1150,8 +1246,8 @@ ${transcript(db.recent(15))}
 
 We sent quote ${e.quote_ref} and the customer has not replied. ${last ? "This is our last follow-up: let them know we are here whenever they are ready." : "Ask if they had a chance to look at it, or if they need any changes."}`;
       const text = await askClaude("Follow-up", "text", prompt, () => last
-        ? `Hi ${S.customer.name}, just a last note on quotation ${e.quote_ref}. We're here whenever you're ready.`
-        : `Hi ${S.customer.name}, did you have a chance to look at quotation ${e.quote_ref}? Happy to change anything you need.`);
+        ? `Hi${S.customer.name ? ` ${S.customer.name}` : ""}, just a last note on quotation ${e.quote_ref}. We're here whenever you're ready.`
+        : `Hi${S.customer.name ? ` ${S.customer.name}` : ""}, did you have a chance to look at quotation ${e.quote_ref}? Happy to change anything you need.`);
       db.addOut(e.id, text);
       e.followups_sent++;
       log("Follow-up", `Sent follow-up ${e.followups_sent} of ${S.settings.followupHours.length} for ${e.quote_ref}.`);
@@ -1224,6 +1320,7 @@ const dayLabel = (t) => `Day ${Math.floor((t - START) / (24 * HOUR)) + 1}`;
 
 const AGENTS = [
   ["Coordinator", "Reads each message and passes the work on"],
+  ["Customer Details", "Gets name, company and emirate from new customers"],
   ["WhatsApp Reception", "Writes every reply to the customer"],
   ["Requirement Gatherer", "Turns the chat into an item list"],
   ["Price & Stock", "Checks price and stock in Excel or Zoho"],
@@ -1232,10 +1329,11 @@ const AGENTS = [
   ["Estimate", "Writes the quotation"],
   ["Follow-up", "Reminds customers and slow suppliers"],
 ];
-const STEPS = [["gathering", "Gathering"], ["checking", "Checking prices"], ["waiting_supplier", "Asking suppliers"], ["awaiting_approval", "Your approval"], ["quoted", "Quote sent"], ["won", "Order won"]];
+const STEPS = [["gathering", "Gathering"], ["checking", "Checking prices"], ["waiting_supplier", "Asking suppliers"], ["awaiting_details", "Customer details"], ["awaiting_approval", "Your approval"], ["quoted", "Quote sent"], ["won", "Order won"]];
 
 const CUSTOMER_TRIES = [
   "Hi, I need price for 50 pcs 4 inch PVC pipe Cosmoplast, 10 elbows 4 inch and 2 Pegler ball valves 1 inch",
+  "This is Ali from Gulf Star Contracting, we are in Sharjah",
   "Also add 2 gate valves 2 inch",
   "Price for 5 Hepworth elbows 4 inch",
   "Do you deliver to Sharjah?",
@@ -1262,6 +1360,7 @@ function customerTries() {
   const third = inStock[2] || inStock[0];
   return [
     `Hi, please quote ${first.join(", ")}`,
+    "This is Ali from Gulf Star Contracting, we are in Sharjah",
     third ? `Also add 1 x ${short(third)}` : null,
     "What is the delivery time?",
     "Yes, confirm the order",
@@ -1306,7 +1405,7 @@ function render() {
   if (sender !== "customer" && !personalContact(sender)) sender = "customer";
   const custPersonal = personalContact(S.customer.phone);
   put($("#sender"),
-    el("option", { value: "customer", selected: sender === "customer" }, `${S.customer.name} +${S.customer.phone}${custPersonal ? " (personal)" : " (customer)"}`),
+    el("option", { value: "customer", selected: sender === "customer" }, `${S.customer.name || "New number"} +${S.customer.phone}${custPersonal ? " (personal)" : " (customer)"}`),
     ...S.personal.filter((c) => !samePhone(c.phone, S.customer.phone)).map((c) => el("option", { value: c.phone, selected: sender === c.phone }, `${c.name} +${c.phone} (personal)`)));
   const personalPhone = sender !== "customer" ? sender : custPersonal ? custPersonal.phone : null;
   $("#sender-label").textContent = personalPhone ? "WhatsApp Business · personal chat, AI is off" : "WhatsApp Business · you are the customer";
@@ -1328,6 +1427,8 @@ function render() {
   }));
   put($("#agents"), ...AGENTS.map(([n, k]) => el("div", { class: `agent${working === n ? " working" : ""}` }, el("b", {}, n), el("span", { class: "kind" }, k))));
   const e = db.openEnquiry() || db.latestEnquiry();
+  const miss = missingDetails();
+  put($("#cust"), el("b", {}, custFull()), ` · +${S.customer.phone}`, miss.length ? el("span", { class: "tag missing", style: "margin-left: 6px" }, `Still to ask: ${listText(miss)}`) : el("span", { class: "tag stock", style: "margin-left: 6px" }, "Details known"));
   $("#enq-ref").textContent = e ? `E${e.id}${e.quote_ref ? ` · ${e.quote_ref}` : ""}` : "";
   const order = STEPS.map((s) => s[0]);
   const at = e ? order.indexOf(e.status) : -1;
@@ -1387,7 +1488,7 @@ function render() {
   const drafts = S.drafts.filter((d) => d.status === "pending");
   put($("#drafts"), ...(drafts.length ? drafts.map((d) => {
     const ta = el("textarea", { id: `draft-${d.id}`, "aria-label": "Quotation text" }, d.body);
-    return el("div", { class: "draft stack" }, el("div", { class: "muted" }, `Enquiry E${d.enquiry_id} · to ${S.customer.name} (+${S.customer.phone})`), ta,
+    return el("div", { class: "draft stack" }, el("div", { class: "muted" }, `Enquiry E${d.enquiry_id} · to ${custFull()} (+${S.customer.phone})`), ta,
       el("div", { class: "row" },
         el("button", { class: "btn primary", type: "button", onclick: () => approveDraft(d.id, ta.value) }, "Approve and send"),
         el("button", { class: "btn danger", type: "button", onclick: () => rejectDraft(d.id) }, "Reject and handle myself")));
@@ -1395,7 +1496,7 @@ function render() {
   const alerts = S.log.filter((l) => l.agent === "Owner alert");
   put($("#alerts"), ...(alerts.length ? alerts.map((l) => el("div", {}, el("time", {}, stamp(l.at)), el("span", { class: "who owner" }, "Alert"),
     el("span", {}, l.text, l.action === "personal" && !personalContact(S.customer.phone)
-      ? el("div", { style: "margin-top: 4px" }, el("button", { class: "btn small primary", type: "button", onclick: markPersonal }, `Add ${S.customer.name} to personal contacts`)) : null))) : [el("p", { class: "empty" }, "No alerts yet.")]));
+      ? el("div", { style: "margin-top: 4px" }, el("button", { class: "btn small primary", type: "button", onclick: markPersonal }, `Add ${custLabel()} to personal contacts`)) : null))) : [el("p", { class: "empty" }, "No alerts yet.")]));
 }
 
 // Excel price list (column names as in src/catalog/excel.ts)
@@ -1517,6 +1618,7 @@ function nextStep() {
   if (S.drafts.some((d) => d.status === "pending")) return { text: "The quote is ready. It waits for your approval before the customer gets it.", tab: "approvals", label: "Open Approvals" };
   const e = db.openEnquiry();
   if (!e) return null;
+  if (e.status === "awaiting_details") return { text: `The quotation waits for the customer's ${listText(missingDetails())}. Reply as the customer.`, tab: "customer", label: "Open Customer" };
   if (e.status === "waiting_supplier") {
     const names = [...new Set(db.openRequests().map((r) => supName(r.supplier_id)))];
     return { text: `Waiting for prices from ${names.join(" and ")}. Reply as each supplier, or tap +24 hours to skip a slow one.`, tab: "supplier", label: "Open Supplier" };
@@ -1579,6 +1681,15 @@ async function uploadSuppliers(file) {
   }
 }
 
+/** Starts a new chat with a new or a known customer; the price list, suppliers, settings and orders stay. */
+function switchCustomer(kind) {
+  const type = S.customer.type;
+  Object.assign(S, { customer: kind === "known" ? knownCustomer() : newCustomer(), messages: [], enquiries: [], items: [], supplierRequests: [], supplierChat: [], drafts: [], log: [] });
+  S.customer.type = type;
+  sender = "customer";
+  save(); renderSetup(); render();
+}
+
 function renderSetup() {
   const cat = $("#catalog");
   // A blank box means "not in the list" (no price, no cost, or stock not tracked).
@@ -1625,6 +1736,9 @@ function renderSetup() {
   const bind = (obj, key, type = "text") => el("input", { type, value: obj[key], step: type === "number" ? "any" : null, onchange: (ev) => { obj[key] = type === "number" ? Number(ev.target.value) || 0 : ev.target.value; save(); render(); } });
   put($("#settings"), 
     field("Business name", bind(st, "businessName")),
+    field("Demo customer (changing it starts a new chat)", el("select", { onchange: (ev) => switchCustomer(ev.target.value) },
+      el("option", { value: "new", selected: !S.customer.detailsAsked || !S.customer.name || S.customer.phone === newCustomer().phone }, "New number, not in your contacts"),
+      el("option", { value: "known", selected: S.customer.phone === knownCustomer().phone }, "Known customer: Rashid, Al Noor Electricals, Dubai"))),
     field("The demo customer is", el("select", { onchange: (ev) => { S.customer.type = ev.target.value; save(); render(); } },
       el("option", { value: "customer", selected: S.customer.type !== "reseller" }, "An end customer (customer price)"),
       el("option", { value: "reseller", selected: S.customer.type === "reseller" }, "A reseller (reseller price)"))),
@@ -1637,6 +1751,7 @@ function renderSetup() {
     field("Quote valid (days)", bind(st, "quoteValidityDays", "number")),
     field("Remind slow supplier after (hours)", bind(st, "supplierReminderHours", "number")),
     field("Skip slow supplier after (hours)", bind(st, "supplierGiveUpHours", "number")),
+    el("label", { class: "check" }, el("input", { type: "checkbox", checked: st.requireDetails, onchange: (ev) => { st.requireDetails = ev.target.checked; save(); } }), "Send quotes only after the customer's name, company and emirate are known"),
     el("label", { class: "check" }, el("input", { type: "checkbox", checked: st.requireApproval, onchange: (ev) => { st.requireApproval = ev.target.checked; save(); } }), "Quotes wait for my approval"),
     el("label", { class: "check" }, el("input", { type: "checkbox", checked: S.useClaude, onchange: (ev) => { S.useClaude = ev.target.checked; save(); render(); } }), "Use Claude for the AI agents"),
     field("Tone of replies", el("textarea", { rows: 2, onchange: (ev) => { st.tone = ev.target.value; save(); } }, st.tone)),
