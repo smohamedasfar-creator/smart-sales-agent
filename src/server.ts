@@ -1,10 +1,12 @@
 import { timingSafeEqual } from "node:crypto";
+import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import express, { type NextFunction, type Request, type Response } from "express";
 import type { Coordinator } from "./agents/coordinator.js";
 import { parseOwnerReplies, parseWebhook, verifySignature } from "./channels/whatsapp.js";
 import type { Config } from "./config.js";
+import { readExcelCatalog } from "./catalog/excel.js";
 import type { CustomerDetails, Settings } from "./db.js";
 
 // HTTP server: the WhatsApp webhook (Meta calls it for every new message) and the
@@ -199,6 +201,26 @@ export function createApp(coordinator: Coordinator, config: AppConfig) {
     }
     db.updateCustomer(Number(req.params.id), changes);
     res.json(db.getCustomer(Number(req.params.id)));
+  });
+
+  // Replaces the Excel price list with an uploaded file, after checking that it can be read.
+  app.post("/api/price-list", express.raw({ type: "application/octet-stream", limit: "20mb" }), async (req, res) => {
+    if (config.catalogSource === "zoho") return void res.status(400).json({ error: "The price list comes from Zoho (CATALOG_SOURCE=zoho)" });
+    const path = config.excel?.path ?? "data/price-list.xlsx";
+    const body = req.body as Buffer;
+    if (!Buffer.isBuffer(body) || body.length === 0) return void res.status(400).json({ error: "Choose an Excel file (.xlsx)" });
+    mkdirSync(dirname(path), { recursive: true });
+    const upload = `${path}.upload.xlsx`;
+    writeFileSync(upload, body);
+    try {
+      const items = await readExcelCatalog(upload, config.excel?.sheet ?? "");
+      renameSync(upload, path);
+      const brands = [...new Set(items.map((i) => i.brand).filter(Boolean))];
+      res.json({ items: items.length, brands });
+    } catch (error) {
+      rmSync(upload, { force: true });
+      res.status(400).json({ error: `This file can't be used: ${(error as Error).message.replace(upload, "the file")}` });
+    }
   });
 
   app.get("/api/orders", (req, res) => {

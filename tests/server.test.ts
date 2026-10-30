@@ -1,4 +1,8 @@
 import { createHmac } from "node:crypto";
+import { existsSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import ExcelJS from "exceljs";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { parseOwnerReplies, parseWebhook } from "../src/channels/whatsapp.js";
@@ -122,6 +126,34 @@ describe("dashboard", () => {
     const orders = await (await fetch(`${base}/api/orders?brand=UGREEN`, { headers })).json();
     expect(orders.map((o: { ref: string; company: string }) => [o.ref, o.company])).toEqual([["SO-0001", "Gulf Star"]]);
     expect((await fetch(`${base}/api/orders/1`, { method: "PUT", headers, body: JSON.stringify({ status: "lost" }) })).status).toBe(400);
+  });
+
+  it("replaces the price list with an uploaded Excel file only when it can be read", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "upload-"));
+    const path = join(dir, "price-list.xlsx");
+    const t = setup();
+    const app = createApp(t.coordinator, {
+      dashboardPassword: "pw",
+      whatsapp: { ...t.ctx.config.whatsapp, appSecret: SECRET, verifyToken: "verify-me" },
+      catalogSource: "excel",
+      excel: { path, sheet: "" },
+    });
+    const server = app.listen(0);
+    servers.push(server);
+    await new Promise((resolve) => server.once("listening", resolve));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const headers = { Authorization: `Basic ${Buffer.from("owner:pw").toString("base64")}`, "Content-Type": "application/octet-stream" };
+
+    const bad = await fetch(`${base}/api/price-list`, { method: "POST", headers, body: Buffer.from("not excel") });
+    expect(bad.status).toBe(400);
+    expect(existsSync(path)).toBe(false);
+
+    const workbook = new ExcelJS.Workbook();
+    workbook.addWorksheet("UGREEN").addRow(["Name", "Customer Price", "QTY"]);
+    workbook.getWorksheet("UGREEN")!.addRow(["UGREEN HDMI CABLE 1M", 18, 7]);
+    const good = await fetch(`${base}/api/price-list`, { method: "POST", headers, body: Buffer.from(await workbook.xlsx.writeBuffer()) });
+    expect(await good.json()).toEqual({ items: 1, brands: ["UGREEN"] });
+    expect(existsSync(path)).toBe(true);
   });
 
   it("shows what is connected without giving away any key", async () => {

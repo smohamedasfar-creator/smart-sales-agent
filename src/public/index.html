@@ -87,6 +87,11 @@
   <section id="settings" hidden>
     <div class="card" id="connections"></div>
     <div class="card">
+      <strong>Price list</strong>
+      <p class="muted">Upload your Excel stock list. Every brand sheet is read; the agents use it straight away.</p>
+      <div class="row"><input type="file" id="price-file" accept=".xlsx" style="width:auto"><button class="primary" id="upload-price">Upload</button><span id="price-status" class="muted"></span></div>
+    </div>
+    <div class="card">
       <div class="grid">
         <div><label>Business name</label><input id="businessName"></div>
         <div><label>Currency</label><input id="currency"></div>
@@ -369,6 +374,17 @@ $("save-settings").addEventListener("click", async () => {
   await api("/settings", { method: "PUT", body });
   $("settings-saved").textContent = "Saved";
   setTimeout(() => ($("settings-saved").textContent = ""), 2000);
+});
+
+$("upload-price").addEventListener("click", async () => {
+  const file = $("price-file").files[0];
+  if (!file) { $("price-status").textContent = "Choose a file first."; return; }
+  $("price-status").textContent = "Checking the file…";
+  const response = await fetch("/api/price-list", { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: file });
+  const data = await response.json().catch(() => ({}));
+  $("price-status").textContent = response.ok
+    ? `Loaded ${data.items} items${data.brands.length ? ` · brands: ${data.brands.join(", ")}` : ""}.`
+    : (data.error || `Upload failed (${response.status})`);
 });
 
 $("t-send").addEventListener("click", async () => {
