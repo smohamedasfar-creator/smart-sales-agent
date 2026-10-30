@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import express, { type NextFunction, type Request, type Response } from "express";
 import type { Coordinator } from "./agents/coordinator.js";
-import { parseWebhook, verifySignature } from "./channels/whatsapp.js";
+import { parseOwnerReplies, parseWebhook, verifySignature } from "./channels/whatsapp.js";
 import type { Config } from "./config.js";
 import type { Settings } from "./db.js";
 
@@ -77,6 +77,7 @@ export function createApp(coordinator: Coordinator, config: AppConfig) {
     // Answer Meta at once; the agents work in the background.
     res.sendStatus(200);
     for (const message of parseWebhook(req.body)) void coordinator.onWhatsApp(message);
+    for (const reply of parseOwnerReplies(req.body)) void coordinator.onOwnerReply(reply);
   });
 
   app.get("/health", (_req, res) => {

@@ -114,6 +114,26 @@ are taken off the customer list. A number is matched with or without the country
 If someone who isn't on the list sends a message that looks personal (family news, an invitation, "how are you bro"),
 the agents stay quiet and send you an alert, so you can add them to the list.
 
+## Keeping your existing WhatsApp Business number ("coexistence")
+
+You don't need a new number. Meta lets a number that already runs the **WhatsApp Business app** also be used by the
+API (they call it *coexistence*): customers keep writing to the number they know, you keep the app on your phone with
+your chats, and the agents answer through the API.
+
+- The number must be on the **WhatsApp Business app** (not personal WhatsApp), on a recent app version.
+- It is connected through Meta's **Embedded Signup**: you scan a QR code with the Business app on your phone. A Meta
+  partner (BSP) or a Meta "Tech Provider" app runs this screen. Choose one that leaves the WhatsApp account in **your own
+  Meta Business account** and lets you create a permanent access token, so this app can talk to the Cloud API directly.
+- Up to 6 months of chat history can be brought over when connecting.
+- **Open the WhatsApp Business app on your phone at least every 14 days**, or Meta disconnects the number from the API.
+- Some app features stop on a coexistence number: broadcast lists, disappearing and view-once messages, live location.
+  Group chats stay in the app only. Messages you send from the app stay free.
+- In the Meta app's webhook settings, subscribe to **messages** and **smb_message_echoes**. The second one tells the
+  agents when *you* reply from your phone: they then stay quiet in that chat until you press **Let the agents continue**
+  in Enquiries, so a customer never gets two answers.
+
+These details come from Meta partners' guides as of late 2026; check Meta's current coexistence page before you start.
+
 ## Going live on WhatsApp
 
 1. Create a Meta Business account and a developer app with the WhatsApp product (see Meta's

@@ -215,6 +215,19 @@ describe("enquiry to order", () => {
     expect(t.db.recentMessages(1)).toHaveLength(0);
   });
 
+  it("steps back from a chat when the owner replies from the WhatsApp Business app", async () => {
+    const t = setup();
+    t.llm.handlers.coordinator = () => ({ intent: "question" });
+    await t.coordinator.onOwnerReply({ id: "wamid.e1", to: CUSTOMER, text: "Hi Ali, yes we have it. I'll send the price." });
+    const enquiry = t.db.openEnquiry(1)!;
+    expect(enquiry.status).toBe("needs_human");
+    expect(t.db.enquiryMessages(enquiry.id).map((m) => m.body)).toContain("Hi Ali, yes we have it. I'll send the price.");
+
+    await t.coordinator.onWhatsApp(fromCustomer("ok thanks, also delivery to Sharjah?"));
+    expect(t.whatsapp.sent).toHaveLength(0);
+    expect(t.llm.calls).toHaveLength(0);
+  });
+
   it("ignores a message WhatsApp delivers twice", async () => {
     const t = setup();
     t.llm.handlers.coordinator = () => ({ intent: "other" });

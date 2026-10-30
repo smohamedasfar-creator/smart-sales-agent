@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { InboundEmail } from "../channels/email.js";
-import type { InboundMessage } from "../channels/whatsapp.js";
+import type { InboundMessage, OwnerReply } from "../channels/whatsapp.js";
 import { samePhone, type Customer, type Enquiry } from "../db.js";
 import { money, transcript, UNTRUSTED_NOTE, type AgentContext } from "./context.js";
 import { createQuote } from "./estimate.js";
@@ -81,6 +81,26 @@ export class Coordinator {
       const customer = this.ctx.db.upsertCustomer(message.from, message.name);
       if (!this.ctx.db.addInbound(customer.id, message.text, message.id)) return;
       await this.handleCustomer(customer);
+    });
+  }
+
+  /**
+   * The owner answered a chat from the WhatsApp Business app on their phone. The agents step back from that chat
+   * (so the customer never gets two answers) until the owner lets them continue from the dashboard.
+   */
+  onOwnerReply(reply: OwnerReply): Promise<void> {
+    return this.serial(reply.to, async () => {
+      const { db } = this.ctx;
+      if (db.getSettings().personalContacts.some((c) => samePhone(c.phone, reply.to))) return;
+      if (db.supplierByPhone(reply.to)) return;
+      const customer = db.upsertCustomer(reply.to, null);
+      const enquiry = db.openEnquiry(customer.id) ?? db.createEnquiry(customer.id);
+      db.addOutbound(customer.id, enquiry.id, reply.text);
+      db.attachMessages(customer.id, enquiry.id);
+      if (enquiry.status !== "needs_human") {
+        db.setStatus(enquiry.id, "needs_human", "You replied from your phone");
+        this.ctx.log(`Owner replied to ${customer.name ?? customer.phone} from the phone; the agents stay quiet in this chat.`);
+      }
     });
   }
 

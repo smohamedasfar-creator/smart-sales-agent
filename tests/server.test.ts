@@ -1,7 +1,7 @@
 import { createHmac } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
-import { parseWebhook } from "../src/channels/whatsapp.js";
+import { parseOwnerReplies, parseWebhook } from "../src/channels/whatsapp.js";
 import { createApp } from "../src/server.js";
 import { setup } from "./helpers.js";
 
@@ -74,6 +74,18 @@ describe("WhatsApp webhook", () => {
       { id: "b", from: "1", type: "image", image: { caption: "this size" } },
     ] as never;
     expect(parseWebhook(body).map((m) => m.text)).toEqual(["Yes", "[photo] this size"]);
+  });
+});
+
+describe("WhatsApp Business app on the same number", () => {
+  it("reads the owner's own replies from the smb_message_echoes webhook", () => {
+    const body = {
+      entry: [{ changes: [{ field: "smb_message_echoes", value: { message_echoes: [
+        { id: "wamid.e1", from: "971500000099", to: "971501111111", type: "text", text: { body: "Sure, sending now" } },
+      ] } }] }],
+    };
+    expect(parseOwnerReplies(body)).toEqual([{ id: "wamid.e1", to: "971501111111", text: "Sure, sending now" }]);
+    expect(parseWebhook(body)).toEqual([]);
   });
 });
 

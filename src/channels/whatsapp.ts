@@ -18,6 +18,13 @@ export interface InboundMessage {
   text: string;
 }
 
+/** A message the owner typed in the WhatsApp Business app on their phone (number shared with the API, "coexistence"). */
+export interface OwnerReply {
+  id: string;
+  to: string;
+  text: string;
+}
+
 export class WhatsAppCloud implements WhatsApp {
   constructor(private readonly config: Config["whatsapp"]) {}
 
@@ -89,25 +96,63 @@ export function verifySignature(rawBody: Buffer, header: string | undefined, app
   return given.length === expected.length && timingSafeEqual(given, expected);
 }
 
+interface WebhookMessage {
+  id: string;
+  from: string;
+  to?: string;
+  type: string;
+  text?: { body: string };
+  button?: { text: string };
+  interactive?: { button_reply?: { title: string }; list_reply?: { title: string } };
+  image?: { caption?: string };
+  document?: { caption?: string; filename?: string };
+  location?: { name?: string; address?: string };
+}
+
 interface WebhookBody {
   entry?: {
     changes?: {
+      field?: string;
       value?: {
         contacts?: { wa_id: string; profile?: { name?: string } }[];
-        messages?: {
-          id: string;
-          from: string;
-          type: string;
-          text?: { body: string };
-          button?: { text: string };
-          interactive?: { button_reply?: { title: string }; list_reply?: { title: string } };
-          image?: { caption?: string };
-          document?: { caption?: string; filename?: string };
-          location?: { name?: string; address?: string };
-        }[];
+        messages?: WebhookMessage[];
+        /** Messages sent from the WhatsApp Business app on the phone (webhook field "smb_message_echoes"). */
+        message_echoes?: WebhookMessage[];
       };
     }[];
   }[];
+}
+
+function messageText(message: WebhookMessage): string {
+  switch (message.type) {
+    case "text":
+      return message.text?.body ?? "";
+    case "button":
+      return message.button?.text ?? "";
+    case "interactive":
+      return message.interactive?.button_reply?.title ?? message.interactive?.list_reply?.title ?? "";
+    case "image":
+      return `[photo] ${message.image?.caption ?? ""}`.trim();
+    case "document":
+      return `[document ${message.document?.filename ?? ""}] ${message.document?.caption ?? ""}`.trim();
+    case "location":
+      return `[location] ${message.location?.name ?? ""} ${message.location?.address ?? ""}`.trim();
+    default:
+      return `[${message.type} message]`;
+  }
+}
+
+/** Pulls out the messages the owner sent from the WhatsApp Business app on their phone. */
+export function parseOwnerReplies(body: unknown): OwnerReply[] {
+  const result: OwnerReply[] = [];
+  for (const entry of (body as WebhookBody).entry ?? []) {
+    for (const change of entry.changes ?? []) {
+      for (const message of change.value?.message_echoes ?? []) {
+        if (message.to) result.push({ id: message.id, to: message.to, text: messageText(message) });
+      }
+    }
+  }
+  return result;
 }
 
 /** Pulls the customer messages out of a webhook call. Delivery and read receipts are ignored. */
@@ -118,30 +163,7 @@ export function parseWebhook(body: unknown): InboundMessage[] {
       const value = change.value;
       for (const message of value?.messages ?? []) {
         const contact = value?.contacts?.find((c) => c.wa_id === message.from);
-        let text: string;
-        switch (message.type) {
-          case "text":
-            text = message.text?.body ?? "";
-            break;
-          case "button":
-            text = message.button?.text ?? "";
-            break;
-          case "interactive":
-            text = message.interactive?.button_reply?.title ?? message.interactive?.list_reply?.title ?? "";
-            break;
-          case "image":
-            text = `[photo] ${message.image?.caption ?? ""}`.trim();
-            break;
-          case "document":
-            text = `[document ${message.document?.filename ?? ""}] ${message.document?.caption ?? ""}`.trim();
-            break;
-          case "location":
-            text = `[location] ${message.location?.name ?? ""} ${message.location?.address ?? ""}`.trim();
-            break;
-          default:
-            text = `[${message.type} message]`;
-        }
-        result.push({ id: message.id, from: message.from, name: contact?.profile?.name ?? null, text });
+        result.push({ id: message.id, from: message.from, name: contact?.profile?.name ?? null, text: messageText(message) });
       }
     }
   }
