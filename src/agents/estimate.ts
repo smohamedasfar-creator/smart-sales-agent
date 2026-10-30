@@ -1,6 +1,6 @@
 import type { Customer, Enquiry } from "../db.js";
 import { money, type AgentContext } from "./context.js";
-import type { PricedQuote } from "./pricing.js";
+import { NO_BRAND, type PricedQuote } from "./pricing.js";
 
 // Estimate agent: writes the quotation message and, when Zoho is connected,
 // creates the estimate in Zoho so it is in your books.
@@ -46,11 +46,27 @@ export async function createQuote(
     }
   }
 
-  const lines = priced.lines.map(
-    (line, index) =>
-      `${index + 1}. ${line.name}\n   ${line.quantity} ${line.unit ?? "pcs"} x ${money(line.unitPrice, settings)} = ${money(line.lineTotal, settings)}`,
-  );
-  const parts = [`*Quotation ${ref}*`, settings.businessName, "", ...lines, ""];
+  // Lines grouped by brand, numbered straight through.
+  const brands = [...new Set(priced.lines.map((line) => line.brand))];
+  const lines: string[] = [];
+  let n = 0;
+  for (const brand of brands) {
+    if (brands.length > 1 || brand !== NO_BRAND) lines.push(`*${brand}*`);
+    for (const line of priced.lines.filter((l) => l.brand === brand)) {
+      lines.push(`${++n}. ${line.name}\n   ${line.quantity} ${line.unit ?? "pcs"} x ${money(line.unitPrice, settings)} = ${money(line.lineTotal, settings)}`);
+    }
+    lines.push("");
+  }
+  const place = customer.emirate ? `${customer.emirate}${customer.area ? ` (${customer.area})` : ""}` : null;
+  const to = [customer.name, customer.company, place].filter(Boolean).join(", ");
+  const parts = [
+    `*Quotation ${ref}*`,
+    settings.businessName + (settings.trn ? ` · TRN ${settings.trn}` : ""),
+    ...(to ? [`To: ${to}`] : []),
+    ...(customer.trn && customer.trn !== "none" ? [`Customer TRN: ${customer.trn}`] : []),
+    "",
+    ...lines,
+  ];
   if (priced.tax > 0) {
     parts.push(`Subtotal: ${money(priced.subtotal, settings)}`, `VAT ${settings.taxPercent}%: ${money(priced.tax, settings)}`);
   }

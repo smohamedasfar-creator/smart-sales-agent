@@ -9,17 +9,28 @@ function itemLine(item: Item): string {
   return `${item.quantity} ${item.unit ?? "pcs"} ${item.description}`;
 }
 
-function suppliersFor(ctx: AgentContext, item: Item): Supplier[] {
-  const all = ctx.db.suppliers();
+const list = (text: string) =>
+  (text ?? "")
+    .split(",")
+    .map((c) => c.trim().toLowerCase())
+    .filter(Boolean);
+
+/**
+ * Suppliers to ask about an item: those who sell its brand; otherwise suppliers with no brands of their own
+ * (matching its category when they list categories). A supplier set up for other brands is never asked.
+ */
+export function suppliersFor(all: Supplier[], item: Pick<Item, "brand" | "category">): Supplier[] {
+  if (item.brand) {
+    const byBrand = all.filter((supplier) => list(supplier.brands).includes(item.brand!.toLowerCase()));
+    if (byBrand.length > 0) return byBrand;
+  }
+  const anyBrand = all.filter((supplier) => list(supplier.brands).length === 0);
   const category = item.category?.toLowerCase();
-  const matching = all.filter((supplier) => {
-    const categories = supplier.categories
-      .split(",")
-      .map((c) => c.trim().toLowerCase())
-      .filter(Boolean);
+  const matching = anyBrand.filter((supplier) => {
+    const categories = list(supplier.categories);
     return categories.length === 0 || (category !== undefined && categories.includes(category));
   });
-  return matching.length > 0 ? matching : all;
+  return matching.length > 0 ? matching : anyBrand;
 }
 
 async function sendToSupplier(ctx: AgentContext, supplier: Supplier, subject: string, body: string, items: Item[]) {
@@ -46,27 +57,29 @@ async function sendToSupplier(ctx: AgentContext, supplier: Supplier, subject: st
   throw new Error(`Supplier ${supplier.name} has no phone or email`);
 }
 
-/** Sends price requests. Returns how many suppliers were asked. */
-export async function askSuppliers(ctx: AgentContext, enquiry: Enquiry, items: Item[]): Promise<number> {
+/** A brand's agent sends its price requests. Returns the names of the suppliers asked. */
+export async function askSuppliers(ctx: AgentContext, enquiry: Enquiry, items: Item[], brand: string | null = null): Promise<string[]> {
   const settings = ctx.db.getSettings();
+  const all = ctx.db.suppliers();
   const bySupplier = new Map<number, { supplier: Supplier; items: Item[] }>();
   for (const item of items) {
-    for (const supplier of suppliersFor(ctx, item)) {
+    for (const supplier of suppliersFor(all, item)) {
       const entry = bySupplier.get(supplier.id) ?? { supplier, items: [] };
       entry.items.push(item);
       bySupplier.set(supplier.id, entry);
     }
   }
 
-  let asked = 0;
+  const asked: string[] = [];
+  const ref = brand ? `E${enquiry.id}-${brand}` : `E${enquiry.id}`;
   for (const { supplier, items: supplierItems } of bySupplier.values()) {
-    const list = supplierItems.map((item, index) => `${index + 1}. ${itemLine(item)}`).join("\n");
+    const lines = supplierItems.map((item, index) => `${index + 1}. ${itemLine(item)}`).join("\n");
     const body =
       `Hello ${supplier.name}, this is ${settings.businessName}.\n` +
-      `Please share your best price (per unit) and availability for:\n${list}\n\n` +
-      `Our ref: E${enquiry.id}. Thank you.`;
+      `Please share your best price (per unit) and availability${brand ? ` for ${brand}` : ""}:\n${lines}\n\n` +
+      `Our ref: ${ref}. Thank you.`;
     try {
-      const channel = await sendToSupplier(ctx, supplier, `Price enquiry E${enquiry.id} - ${settings.businessName}`, body, supplierItems);
+      const channel = await sendToSupplier(ctx, supplier, `Price enquiry ${ref} - ${settings.businessName}`, body, supplierItems);
       ctx.db.addSupplierRequest({
         enquiry_id: enquiry.id,
         supplier_id: supplier.id,
@@ -74,7 +87,7 @@ export async function askSuppliers(ctx: AgentContext, enquiry: Enquiry, items: I
         body,
         itemIds: supplierItems.map((item) => item.id),
       });
-      asked++;
+      asked.push(supplier.name);
     } catch (error) {
       ctx.log(`Could not ask supplier ${supplier.name}: ${(error as Error).message}`);
     }

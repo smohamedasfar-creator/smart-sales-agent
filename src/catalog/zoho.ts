@@ -26,6 +26,8 @@ interface ZohoItem {
   actual_available_stock?: number;
   category_name?: string;
   group_name?: string;
+  brand?: string;
+  manufacturer?: string;
 }
 
 const ITEMS_CACHE_MS = 15 * 60 * 1000;
@@ -91,6 +93,7 @@ export class ZohoClient implements Catalog {
           sku: item.sku || item.item_id,
           name: item.name,
           category: item.category_name || item.group_name || null,
+          brand: item.brand || item.manufacturer || null,
           unit: item.unit || null,
           price: item.rate ?? null,
           cost: item.purchase_rate ?? null,

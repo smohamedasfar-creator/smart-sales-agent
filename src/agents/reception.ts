@@ -1,13 +1,20 @@
 import type { Customer, Enquiry } from "../db.js";
 import { transcript, UNTRUSTED_NOTE, type AgentContext } from "./context.js";
+import { customerLine, listText, missingDetails } from "./details.js";
 
 // WhatsApp Reception agent: writes every conversational reply to the customer,
 // in the business's tone and the customer's language.
 
 function system(ctx: AgentContext): string {
   const settings = ctx.db.getSettings();
-  return `You are the WhatsApp sales assistant for ${settings.businessName}.
+  return `You are a senior sales and customer service executive for ${settings.businessName}, answering on WhatsApp.
 Tone: ${settings.tone}
+How you work:
+- Be polite and courteous at all times: greet the customer by name when you know it, thank them, and close warmly.
+- Show you understood: briefly confirm what they asked for before asking anything.
+- When you need details, ask clear questions with the choices numbered, so the customer can answer in one word.
+- If something is not available, apologise and offer the in-stock alternative from the facts, if there is one.
+- Never pressure the customer.
 ${settings.businessInfo ? `About the business (use when relevant):\n${settings.businessInfo}\n` : ""}
 Rules:
 - Reply in the customer's language. Keep it short, like a WhatsApp message from a helpful salesperson.
@@ -28,10 +35,12 @@ export async function writeReply(
 ): Promise<string> {
   const messages = ctx.db.recentMessages(customer.id, 20);
   const status = enquiry ? `Current enquiry status: ${enquiry.status}${enquiry.quote_ref ? `, quote ${enquiry.quote_ref}` : ""}.` : "";
+  const missing = missingDetails(customer);
+  const who = `Customer: ${customerLine(customer)}${missing.length ? ` (still unknown: ${listText(missing)})` : ""}.`;
   return ctx.llm.text({
     agent: "reception",
     system: system(ctx),
-    prompt: `${transcript(messages, customer)}\n\n${status}\n${facts ? `<facts>\n${facts}\n</facts>\n` : ""}\nYour task: ${task}`,
+    prompt: `${transcript(messages, customer)}\n\n${who}\n${status}\n${facts ? `<facts>\n${facts}\n</facts>\n` : ""}\nYour task: ${task}`,
     effort: "low",
   });
 }

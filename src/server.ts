@@ -5,7 +5,7 @@ import express, { type NextFunction, type Request, type Response } from "express
 import type { Coordinator } from "./agents/coordinator.js";
 import { parseOwnerReplies, parseWebhook, verifySignature } from "./channels/whatsapp.js";
 import type { Config } from "./config.js";
-import type { Settings } from "./db.js";
+import type { CustomerDetails, Settings } from "./db.js";
 
 // HTTP server: the WhatsApp webhook (Meta calls it for every new message) and the
 // owner's dashboard with its API.
@@ -158,20 +158,57 @@ export function createApp(coordinator: Coordinator, config: AppConfig) {
   });
 
   app.post("/api/suppliers", (req, res) => {
-    const { name, phone, email, categories } = req.body ?? {};
+    const { name, phone, email, categories, brands } = req.body ?? {};
     if (!name || (!phone && !email)) return void res.status(400).json({ error: "Name and a phone or email are required" });
-    res.json(db.addSupplier({ name, phone: phone || null, email: email || null, categories: categories ?? "" }));
+    res.json(db.addSupplier({ name, phone: phone || null, email: email || null, categories: categories ?? "", brands: brands ?? "" }));
   });
 
   app.put("/api/suppliers/:id", (req, res) => {
-    const { name, phone, email, categories, active } = req.body ?? {};
+    const { name, phone, email, categories, brands, active } = req.body ?? {};
     db.updateSupplier(Number(req.params.id), {
       name,
       phone: phone || null,
       email: email || null,
       categories: categories ?? "",
+      brands: brands ?? "",
       active: active ? 1 : 0,
     });
+    res.json({ ok: true });
+  });
+
+  // A customer's level, kind (end customer or reseller) and details, set by the owner.
+  app.put("/api/customers/:id", (req, res) => {
+    const body = req.body ?? {};
+    const changes: CustomerDetails = {};
+    const text = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim().slice(0, 120) : null);
+    if ("level" in body) {
+      const level = Number(body.level);
+      if (!Number.isInteger(level) || level < 1 || level > db.getSettings().levels.length) return void res.status(400).json({ error: "Unknown level" });
+      changes.level = level;
+    }
+    if ("type" in body) {
+      if (body.type !== "customer" && body.type !== "reseller") return void res.status(400).json({ error: "Type is customer or reseller" });
+      changes.type = body.type;
+    }
+    for (const key of ["name", "company", "emirate", "area"] as const) if (key in body) changes[key] = text(body[key]);
+    if ("trn" in body) {
+      const trn = text(body.trn);
+      if (trn && trn !== "none" && !/^\d{15}$/.test(trn)) return void res.status(400).json({ error: "A TRN has 15 digits (or write none)" });
+      changes.trn = trn;
+      changes.trn_problem = null;
+    }
+    db.updateCustomer(Number(req.params.id), changes);
+    res.json(db.getCustomer(Number(req.params.id)));
+  });
+
+  app.get("/api/orders", (req, res) => {
+    res.json(db.orders(typeof req.query.brand === "string" && req.query.brand ? req.query.brand : undefined));
+  });
+
+  app.put("/api/orders/:id", (req, res) => {
+    const status = req.body?.status;
+    if (!["confirmed", "ordered", "delivered", "paid"].includes(status)) return void res.status(400).json({ error: "Unknown status" });
+    db.setOrderStatus(Number(req.params.id), status);
     res.json({ ok: true });
   });
 

@@ -13,6 +13,8 @@ export class FakeLlm implements Llm {
   handlers: Record<string, (request: LlmRequest) => unknown> = {
     reception: (request) => `reply for: ${request.prompt.split("Your task: ")[1] ?? ""}`,
     followup: () => "Just checking in on our quotation.",
+    details: () => ({ name: null, company: null, emirate: null, area: null, trn: null }),
+    options: () => ({ questions: [] }),
   };
 
   async json<T>(request: LlmRequest & { schema: z.ZodType<T> }): Promise<T> {
@@ -64,8 +66,10 @@ export const CATALOG: CatalogItem[] = [
   { sku: "TEE-110", name: 'PVC Tee 4"', category: "Fittings", unit: "pcs", price: 4.1, cost: 2.8, stock: 100 },
 ];
 
-export function setup(options: { catalog?: CatalogItem[]; followupTemplate?: string } = {}) {
+export function setup(options: { catalog?: CatalogItem[]; followupTemplate?: string; requireDetails?: boolean } = {}) {
   const db = new Db(":memory:");
+  // Most flow tests are about the enquiry itself; customer details have their own tests.
+  db.saveSettings({ ...db.getSettings(), requireDetails: options.requireDetails ?? false });
   let clock = new Date("2026-10-01T08:00:00Z");
   db.now = () => clock;
   const llm = new FakeLlm();

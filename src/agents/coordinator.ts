@@ -3,11 +3,13 @@ import type { InboundEmail } from "../channels/email.js";
 import type { InboundMessage, OwnerReply } from "../channels/whatsapp.js";
 import { samePhone, type Customer, type Enquiry } from "../db.js";
 import { money, transcript, UNTRUSTED_NOTE, type AgentContext } from "./context.js";
+import { normalize, searchCatalog } from "../catalog/catalog.js";
+import { customerLine, emirateIn, listText, missingDetails, updateDetails } from "./details.js";
 import { createQuote } from "./estimate.js";
 import { runCustomerFollowups, runSupplierChecks } from "./followup.js";
 import { gatherRequirements } from "./gatherer.js";
 import { checkPrices } from "./priceChecker.js";
-import { priceItems, priceWarnings } from "./pricing.js";
+import { buyerFor, priceItems, priceWarnings, type PricedQuote } from "./pricing.js";
 import { writeReply } from "./reception.js";
 import { askSuppliers, handleSupplierReply } from "./supplier.js";
 
@@ -37,7 +39,7 @@ Classify the customer's latest message (the last "Customer" lines of the convers
 - question: asks about something else (delivery, payment, location, an item in the quote) without changing the products.
 - human_request: asks to talk to a person, or is angry or complaining.
 - personal: a personal or social message from family, friends or someone the owner knows (family news, invitations, jokes, "how are you bro"), not about buying anything.
-- other: greetings, thanks and anything else.
+- other: greetings, thanks and anything else. Messages that only give the customer's name, company, location or TRN are "other".
 ${UNTRUSTED_NOTE}`;
 
 export class Coordinator {
@@ -113,6 +115,15 @@ export class Coordinator {
     });
   }
 
+  /** True when the customer's latest message names something from the price list, not just a name, place or TRN. */
+  private async namesProducts(customer: Customer): Promise<boolean> {
+    const last = this.ctx.db.recentMessages(customer.id, 5).filter((m) => m.direction === "in").at(-1)?.body ?? "";
+    const stop = new Set(["this", "from", "are", "for", "with", "our", "the", "and", "sorry", "trn", "vat", "number", "company", "name", "located", "here", "you", "your", "thanks", "thank"]);
+    const words = normalize(last).filter((w) => !/\d/.test(w) && w.length >= 3 && !stop.has(w) && !emirateIn(w));
+    if (words.length === 0) return false;
+    return searchCatalog(await this.ctx.catalog.items(), words.join(" ")).some((item) => words.some((w) => normalize(item.name).includes(w)));
+  }
+
   private async handleCustomer(customer: Customer): Promise<void> {
     const { db } = this.ctx;
     let enquiry = db.openEnquiry(customer.id) ?? null;
@@ -142,6 +153,53 @@ export class Coordinator {
         return;
       }
 
+      // A new customer gives name, company, emirate and TRN before a quote goes out.
+      const settings = db.getSettings();
+      let detailsSaved = false;
+      if (settings.requireDetails && missingDetails(customer).length > 0) {
+        const saved = await updateDetails(this.ctx, customer);
+        customer = db.getCustomer(customer.id)!;
+        if (saved.length > 0) {
+          detailsSaved = true;
+          this.ctx.log(`Customer details for ${customer.phone}: ${saved.join(", ")}`);
+          if (missingDetails(customer).length === 0 && customer.level === null) {
+            db.updateCustomer(customer.id, { level: settings.newCustomerLevel });
+            customer = db.getCustomer(customer.id)!;
+            const buyer = buyerFor(settings, customer, db.hasOrdered(customer.id));
+            const name = (level: number) => settings.levels[level - 1]?.name ?? `Level ${level}`;
+            await this.notifyOwner(
+              `New customer: ${customerLine(customer)}. ${buyer.firstOrder ? `Their first order gets ${name(buyer.level)} prices, then` : "They are on"} ${name(customer.level!)}; change it in Enquiries if needed.`,
+            );
+          }
+        }
+      }
+      const onlyDetails = detailsSaved && (intent === "new_enquiry" || intent === "add_details") && !(await this.namesProducts(customer));
+      const effective = onlyDetails ? "other" : intent;
+
+      if (enquiry?.status === "awaiting_details" && effective !== "new_enquiry" && effective !== "add_details" && effective !== "human_request") {
+        db.attachMessages(customer.id, enquiry.id);
+        const missing = missingDetails(customer);
+        if (missing.length > 0) {
+          await this.reply(customer, enquiry, `Thank the customer and politely ask for their ${listText(missing)} so we can finalise the quotation.`, "", { asksDetails: true });
+          return;
+        }
+        this.ctx.log(`Customer details complete for E${enquiry.id}; finishing the quotation.`);
+        await this.quote(customer, enquiry);
+        return;
+      }
+      if (detailsSaved && effective === "other") {
+        if (enquiry) db.attachMessages(customer.id, enquiry.id);
+        const missing = missingDetails(customer);
+        await this.reply(
+          customer,
+          enquiry,
+          `Thank the customer for their details.${missing.length ? ` Politely ask for their ${listText(missing)} too.` : ""}${enquiry ? " Say their quotation will follow shortly." : " Ask which products they need."}`,
+          "",
+          { asksDetails: missing.length > 0 },
+        );
+        return;
+      }
+
       if (intent === "human_request") {
         enquiry ??= db.createEnquiry(customer.id);
         db.attachMessages(customer.id, enquiry.id);
@@ -159,8 +217,8 @@ export class Coordinator {
         return;
       }
 
-      if (intent === "new_enquiry" || intent === "add_details") {
-        if (!enquiry || (intent === "new_enquiry" && enquiry.status === "quoted")) enquiry = db.createEnquiry(customer.id);
+      if (effective === "new_enquiry" || effective === "add_details") {
+        if (!enquiry || (effective === "new_enquiry" && enquiry.status === "quoted")) enquiry = db.createEnquiry(customer.id);
         db.attachMessages(customer.id, enquiry.id);
         for (const draft of db.pendingDrafts()) if (draft.enquiry_id === enquiry.id) db.setDraft(draft.id, "rejected");
         await this.gather(customer, enquiry);
@@ -171,7 +229,7 @@ export class Coordinator {
       await this.reply(
         customer,
         enquiry,
-        intent === "question"
+        effective === "question"
           ? "Answer the customer's question using the facts. If the facts do not answer it, say we will check and reply soon."
           : "Reply naturally. If they have not asked for anything yet, ask which products they need a price for.",
         enquiry ? this.facts(enquiry, customer) : "",
@@ -210,8 +268,18 @@ export class Coordinator {
     const { db } = this.ctx;
     db.setStatus(enquiry.id, "checking");
     const { needSupplier } = await checkPrices(this.ctx, enquiry.id);
-    if (needSupplier.length > 0 && db.suppliers().length > 0) {
-      const asked = await askSuppliers(this.ctx, enquiry, needSupplier);
+    // Each brand's agent takes its own items: from stock, or from that brand's suppliers.
+    const byBrand = new Map<string, typeof needSupplier>();
+    for (const item of needSupplier) byBrand.set(item.brand ?? "", [...(byBrand.get(item.brand ?? "") ?? []), item]);
+    let asked = 0;
+    for (const [brand, items] of byBrand) {
+      const names = await askSuppliers(this.ctx, enquiry, items, brand || null);
+      asked += names.length;
+      const label = brand ? `${brand} agent` : "Supplier Enquiry";
+      if (names.length > 0) this.ctx.log(`${label}: asked ${names.join(" and ")} for ${items.map((i) => i.description).join(", ")} (E${enquiry.id})`);
+      else await this.notifyOwner(`No supplier is set up for ${brand || "these items"}, so ${items.map((i) => i.description).join(", ")} can't be priced (E${enquiry.id}). Add a supplier${brand ? ` for ${brand}` : ""}.`);
+    }
+    if (needSupplier.length > 0) {
       if (asked > 0) {
         db.setStatus(enquiry.id, "waiting_supplier");
         await this.reply(
@@ -243,7 +311,21 @@ export class Coordinator {
   private async quote(customer: Customer, enquiry: Enquiry): Promise<void> {
     const { db } = this.ctx;
     const settings = db.getSettings();
-    const priced = priceItems(db.items(enquiry.id), settings, customer.phone);
+    customer = db.getCustomer(customer.id)!;
+    const missing = missingDetails(customer);
+    if (settings.requireDetails && missing.length > 0) {
+      db.setStatus(enquiry.id, "awaiting_details", `Waiting for the customer's ${listText(missing)}`);
+      await this.reply(
+        customer,
+        enquiry,
+        `Thank the customer. Tell them the quotation is almost ready, and politely ask for their ${listText(missing)} to finalise it. Do not mention suppliers or stock.`,
+        "",
+        { asksDetails: true },
+      );
+      return;
+    }
+    const priced = this.price(customer, db.items(enquiry.id));
+    this.ctx.log(`Pricing E${enquiry.id}: ${priced.lines.map((l) => `${l.brand}: ${l.name} ${l.quantity} x ${l.unitPrice} (${l.how})`).join("; ")}`);
     if (priced.lines.length === 0) {
       db.setStatus(enquiry.id, "needs_human", "None of the items could be priced");
       await this.reply(customer, enquiry, "Tell the customer we are checking these items and our team will get back to them soon.");
@@ -256,13 +338,20 @@ export class Coordinator {
       db.addDraft({ enquiry_id: enquiry.id, kind: "quote", to_phone: customer.phone, body: quote.body });
       db.setStatus(enquiry.id, "awaiting_approval", warnings.length ? `Check prices: ${warnings.join("; ")}` : undefined);
       await this.notifyOwner(
-        `Quote ${quote.ref} for ${customer.name ?? customer.phone} (${money(quote.total, settings)}) is waiting for your approval.` +
+        `Quote ${quote.ref} for ${customerLine(customer)} (${money(quote.total, settings)}) is waiting for your approval.` +
           (warnings.length ? ` Please check: ${warnings.join("; ")}.` : ""),
       );
       return;
     }
     await this.send(customer, enquiry.id, quote.body);
     await this.quoteSent(enquiry.id);
+  }
+
+  /** Prices items for this customer: their price list prices, margins and level (the first-order level on a first order). */
+  private price(customer: Customer, items: ReturnType<AgentContext["db"]["items"]>): PricedQuote {
+    const { db } = this.ctx;
+    const settings = db.getSettings();
+    return priceItems(items, settings, buyerFor(settings, customer, db.hasOrdered(customer.id)));
   }
 
   private async quoteSent(enquiryId: number): Promise<void> {
@@ -275,7 +364,10 @@ export class Coordinator {
 
   private async accept(customer: Customer, enquiry: Enquiry): Promise<void> {
     const { db } = this.ctx;
+    // Priced before the status changes, so a first order keeps its first-order prices.
+    const priced = this.price(customer, db.items(enquiry.id));
     db.attachMessages(customer.id, enquiry.id);
+    const facts = this.facts(enquiry, customer);
     db.setStatus(enquiry.id, "won", "Customer accepted the quote");
     if (enquiry.zoho_estimate_id && this.ctx.zoho) {
       await this.ctx.zoho.markEstimate(enquiry.zoho_estimate_id, "accepted").catch((error) => this.ctx.log(`Zoho: ${error.message}`));
@@ -284,11 +376,26 @@ export class Coordinator {
       customer,
       enquiry,
       "Thank the customer and confirm we received their order for this quote. Explain the next steps (payment, delivery) only if they are in the business information; otherwise say our team will contact them to arrange delivery.",
-      this.facts(enquiry, customer),
+      facts,
     );
     const settings = db.getSettings();
+    // One order per brand, so each brand's orders can be managed on their own.
+    const orders = [...new Set(priced.lines.map((l) => l.brand))].map((brand) => {
+      const lines = priced.lines.filter((l) => l.brand === brand);
+      const subtotal = Math.round(lines.reduce((sum, l) => sum + l.lineTotal, 0) * 100) / 100;
+      return db.addOrder({
+        enquiry_id: enquiry.id,
+        customer_id: customer.id,
+        quote_ref: enquiry.quote_ref,
+        brand,
+        subtotal,
+        lines: lines.map(({ name, quantity, unit, unitPrice, lineTotal }) => ({ name, quantity, unit, unitPrice, lineTotal })),
+      });
+    });
+    if (customer.level === null) db.updateCustomer(customer.id, { level: settings.newCustomerLevel });
     await this.notifyOwner(
-      `Order confirmed: ${customer.name ?? customer.phone} accepted quote ${enquiry.quote_ref} (${money(enquiry.quote_total ?? 0, settings)}).`,
+      `Order confirmed: ${customerLine(customer)} accepted quote ${enquiry.quote_ref} (${money(enquiry.quote_total ?? 0, settings)}). ` +
+        `By brand: ${orders.map((o) => `${o.brand} ${o.ref} ${money(o.subtotal, settings)}`).join("; ")}.`,
     );
   }
 
@@ -299,7 +406,7 @@ export class Coordinator {
     if (items.length === 0) return "";
     const lines = [`Items requested:`, ...items.map((i) => `- ${i.quantity} ${i.unit ?? ""} ${i.description}`)];
     if (enquiry.status === "quoted" || enquiry.status === "won") {
-      const priced = priceItems(items, settings, customer.phone);
+      const priced = this.price(customer, items);
       lines.push(
         "",
         `Quote ${enquiry.quote_ref} (valid ${settings.quoteValidityDays} days):`,
@@ -317,7 +424,13 @@ export class Coordinator {
     this.ctx.db.addOutbound(customer.id, enquiryId, body);
   }
 
-  private async reply(customer: Customer, enquiry: Enquiry | null, task: string, facts = ""): Promise<void> {
+  private async reply(customer: Customer, enquiry: Enquiry | null, task: string, facts = "", options: { asksDetails?: boolean } = {}): Promise<void> {
+    const { db } = this.ctx;
+    customer = db.getCustomer(customer.id) ?? customer;
+    const missing = db.getSettings().requireDetails ? missingDetails(customer) : [];
+    const askNow = missing.length > 0 && !customer.details_asked && !options.asksDetails && !/team will contact|happy to help with any future/.test(task);
+    if (askNow) task += ` This is a new customer: at the end, also politely ask for their ${listText(missing)}, so we can prepare the quotation and arrange delivery.`;
+    if (askNow || options.asksDetails) db.updateCustomer(customer.id, { details_asked: 1 });
     const text = await writeReply(this.ctx, customer, enquiry, task, facts);
     if (text) await this.send(customer, enquiry?.id ?? null, text);
   }

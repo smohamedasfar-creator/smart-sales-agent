@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { searchCatalog, type CatalogItem } from "../catalog/catalog.js";
+import { brandIn, searchCatalog, type CatalogItem } from "../catalog/catalog.js";
 import type { Item } from "../db.js";
 import type { AgentContext } from "./context.js";
 
@@ -20,7 +20,7 @@ const SYSTEM = `You are the Price & Stock checker for a trading company.
 For each requested item you get a few candidate products from our price list.
 Pick the candidate that is the same product: same type and the same size, grade or specification.
 If the customer's size or specification differs from every candidate, answer null; a wrong match leads to a wrong quote.
-If the customer gave no brand, any brand of the right product matches.`;
+If the customer named a brand, only that brand matches. If they gave no brand, any brand of the right product matches; prefer one with enough stock.`;
 
 export interface PriceCheckResult {
   /** Items we cannot supply from stock: not in the price list, or not enough stock. */
@@ -30,8 +30,13 @@ export interface PriceCheckResult {
 export async function checkPrices(ctx: AgentContext, enquiryId: number): Promise<PriceCheckResult> {
   const items = ctx.db.items(enquiryId);
   const catalog = await ctx.catalog.items();
+  // A brand the customer named narrows the candidates to that brand.
+  const askedBrand = new Map(items.map((item) => [item.id, brandIn(catalog, item.description)]));
   const candidates = new Map<number, CatalogItem[]>();
-  for (const item of items) candidates.set(item.id, searchCatalog(catalog, item.description));
+  for (const item of items) {
+    const brand = askedBrand.get(item.id);
+    candidates.set(item.id, searchCatalog(catalog, item.description).filter((c) => !brand || c.brand === brand));
+  }
 
   const withCandidates = items.filter((item) => candidates.get(item.id)!.length > 0);
   const chosen = new Map<number, string | null>();
@@ -40,7 +45,7 @@ export async function checkPrices(ctx: AgentContext, enquiryId: number): Promise
       .map((item) => {
         const options = candidates
           .get(item.id)!
-          .map((c) => `    - sku: ${c.sku} | ${c.name}${c.unit ? ` | unit: ${c.unit}` : ""}${c.category ? ` | ${c.category}` : ""}`)
+          .map((c) => `    - sku: ${c.sku} | ${c.name}${c.brand ? ` | brand: ${c.brand}` : ""}${c.unit ? ` | unit: ${c.unit}` : ""}${c.category ? ` | ${c.category}` : ""} | stock: ${c.stock ?? "not tracked"}`)
           .join("\n");
         return `Item ${item.id}: ${item.quantity} ${item.unit ?? ""} ${item.description}\n  Candidates:\n${options}`;
       })
@@ -60,8 +65,9 @@ export async function checkPrices(ctx: AgentContext, enquiryId: number): Promise
     const sku = chosen.get(item.id) ?? null;
     const product = sku ? candidates.get(item.id)!.find((c) => c.sku === sku) : undefined;
     if (!product) {
-      ctx.db.updateItem(item.id, { sku: null, matched_name: null, source: null, available: 0 });
-      needSupplier.push({ ...item, available: 0 });
+      const brand = askedBrand.get(item.id) ?? null;
+      ctx.db.updateItem(item.id, { sku: null, matched_name: null, source: null, available: 0, brand });
+      needSupplier.push({ ...item, available: 0, brand });
       continue;
     }
     // A price list without a stock column is treated as "always available".
@@ -70,8 +76,13 @@ export async function checkPrices(ctx: AgentContext, enquiryId: number): Promise
       sku: product.sku,
       matched_name: product.name,
       category: product.category,
+      brand: product.brand ?? null,
       unit: item.unit ?? product.unit,
       list_price: product.price,
+      reseller_price: product.resellerPrice ?? null,
+      margin_customer: product.marginCustomer ?? null,
+      margin_reseller: product.marginReseller ?? null,
+      remark: product.remark ?? null,
       cost: product.cost,
       available: inStock ? 1 : 0,
       source: inStock ? ("stock" as const) : null,

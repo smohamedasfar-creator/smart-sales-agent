@@ -6,9 +6,18 @@ export interface CatalogItem {
   sku: string;
   name: string;
   category: string | null;
+  /** Brand, from a Brand column or the sheet's name; null when unknown. */
+  brand?: string | null;
   unit: string | null;
-  /** Selling price from the price list, if it has one. */
+  /** Selling price to end customers, if the price list has one. */
   price: number | null;
+  /** Selling price to resellers, if the price list has one. */
+  resellerPrice?: number | null;
+  /** The item's own margins in percent, if the price list has them. */
+  marginCustomer?: number | null;
+  marginReseller?: number | null;
+  /** Remarks such as a minimum order quantity. */
+  remark?: string | null;
   /** Purchase cost, if the price list has one. */
   cost: number | null;
   /** Quantity in stock; null when the price list does not track stock. */
@@ -40,7 +49,7 @@ export function normalize(text: string): string[] {
 }
 
 function score(queryTokens: string[], item: CatalogItem): number {
-  const haystack = normalize(`${item.name} ${item.sku} ${item.category ?? ""}`);
+  const haystack = normalize(`${item.name} ${item.sku} ${item.brand ?? ""} ${item.category ?? ""}`);
   let total = 0;
   for (const token of queryTokens) {
     const numeric = /\d/.test(token);
@@ -50,6 +59,29 @@ function score(queryTokens: string[], item: CatalogItem): number {
     else if (!numeric && token.length >= 3 && haystack.some((word) => word.startsWith(token) || token.startsWith(word))) total += 1;
   }
   return total;
+}
+
+/** The brand the customer named in a description, if the price list has it. */
+export function brandIn(items: CatalogItem[], description: string): string | null {
+  const words = ` ${normalize(description).join(" ")} `;
+  const brands = [...new Set(items.map((i) => i.brand).filter((b): b is string => Boolean(b)))];
+  return brands.find((brand) => words.includes(` ${normalize(brand).join(" ")} `)) ?? null;
+}
+
+/**
+ * Products that fit a request about equally well: the same kind of product (the customer's words, not sizes, match
+ * as well as the best match's do) and nearly the best score. More than one means we should ask which one.
+ */
+export function closeMatches(items: CatalogItem[], description: string, limit = 12): CatalogItem[] {
+  const brand = brandIn(items, description);
+  const list = searchCatalog(items, description, limit).filter((c) => !brand || c.brand === brand);
+  if (list.length < 2) return list;
+  const query = normalize(description);
+  const words = query.filter((t) => !/\d/.test(t));
+  const bestWords = Math.max(...list.map((c) => score(words, c)));
+  const kind = list.filter((c) => score(words, c) >= Math.max(1, bestWords - 1));
+  const best = Math.max(...kind.map((c) => score(query, c)));
+  return kind.filter((c) => score(query, c) >= best - 1);
 }
 
 /** Returns the catalog items that look most like the description, best first. */

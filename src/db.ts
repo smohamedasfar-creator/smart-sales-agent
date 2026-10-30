@@ -9,6 +9,7 @@ export type EnquiryStatus =
   | "gathering" // still collecting what the customer needs
   | "checking" // matching items to the price list
   | "waiting_supplier" // asked a supplier, waiting for their prices
+  | "awaiting_details" // priced, waiting for a new customer's name, company, emirate and TRN
   | "awaiting_approval" // quote is ready, the owner has to approve it
   | "quoted" // quote sent to the customer
   | "won"
@@ -19,6 +20,7 @@ export const OPEN_STATUSES: EnquiryStatus[] = [
   "gathering",
   "checking",
   "waiting_supplier",
+  "awaiting_details",
   "awaiting_approval",
   "quoted",
   "needs_human",
@@ -30,6 +32,35 @@ export interface Customer {
   name: string | null;
   created_at: string;
   last_inbound_at: string | null;
+  company: string | null;
+  emirate: string | null;
+  area: string | null;
+  /** 15-digit UAE VAT number, "none" when not VAT registered. */
+  trn: string | null;
+  /** A TRN the customer sent that is not 15 digits, so we ask again. */
+  trn_problem: string | null;
+  /** Customer level (1 = best price); null until set, then the new-customer level applies. */
+  level: number | null;
+  /** "customer" (end customer) or "reseller": which price list price and item margin applies. */
+  type: "customer" | "reseller";
+  /** 1 once we have asked a new customer for their details. */
+  details_asked: number;
+}
+
+export type CustomerDetails = Partial<Pick<Customer, "name" | "company" | "emirate" | "area" | "trn" | "trn_problem" | "level" | "type" | "details_asked">>;
+
+export interface Order {
+  id: number;
+  ref: string;
+  enquiry_id: number;
+  customer_id: number;
+  quote_ref: string | null;
+  brand: string;
+  /** JSON array of { name, quantity, unit, unitPrice, lineTotal }. */
+  lines: string;
+  subtotal: number;
+  status: "confirmed" | "ordered" | "delivered" | "paid";
+  created_at: string;
 }
 
 export interface Message {
@@ -64,9 +95,15 @@ export interface Item {
   sku: string | null;
   matched_name: string | null;
   category: string | null;
+  brand: string | null;
   source: "stock" | "supplier" | null;
   available: number | null; // 1 yes, 0 no, null unknown
   list_price: number | null;
+  reseller_price: number | null;
+  /** The item's own margins from the price list, in percent. */
+  margin_customer: number | null;
+  margin_reseller: number | null;
+  remark: string | null;
   cost: number | null;
   unit_price: number | null;
   supplier_id: number | null;
@@ -78,6 +115,8 @@ export interface Supplier {
   phone: string | null;
   email: string | null;
   categories: string; // comma separated, empty = everything
+  /** Brands this supplier sells, comma separated; empty = asked about any brand that has no supplier of its own. */
+  brands: string;
   active: number;
   last_inbound_at: string | null;
 }
@@ -117,6 +156,7 @@ export interface Settings {
     priceBasis: "list" | "cost";
     defaultPercent: number;
     byCategory: Record<string, number>;
+    byBrand: Record<string, number>;
     byCustomer: Record<string, number>;
     /** Round each unit price up to a multiple of this (0 = no rounding). */
     roundTo: number;
@@ -129,6 +169,18 @@ export interface Settings {
   supplierGiveUpHours: number;
   /** Family, friends and other people the agents never answer; they are not customers. */
   personalContacts: PersonalContact[];
+  /** Your own VAT TRN, printed on quotations. */
+  trn: string;
+  /** Quotes go out only once a customer's name, company, emirate and TRN are known. */
+  requireDetails: boolean;
+  /** Level 1 gets the best price; each other level pays this percentage more. */
+  levels: { name: string; uplift: number }[];
+  /** A category's own percentage per level, e.g. { "SWITCH": { "2": 3, "3": 8 } }. */
+  levelByCategory: Record<string, Record<string, number>>;
+  newCustomerLevel: number;
+  /** A new customer's first order is priced at firstOrderLevel; they are not told. */
+  firstOrderOffer: boolean;
+  firstOrderLevel: number;
 }
 
 export interface PersonalContact {
@@ -148,12 +200,13 @@ export const DEFAULT_SETTINGS: Settings = {
   businessName: "Our Company",
   businessInfo: "",
   currency: "AED",
-  tone: "Friendly, short and professional. Use simple English.",
+  tone: "Polite, warm and professional, like an experienced senior sales and customer service executive. Use simple, clear English.",
   requireApproval: true,
   margin: {
     priceBasis: "list",
     defaultPercent: 15,
     byCategory: {},
+    byBrand: {},
     byCustomer: {},
     roundTo: 0,
   },
@@ -163,6 +216,17 @@ export const DEFAULT_SETTINGS: Settings = {
   supplierReminderHours: 4,
   supplierGiveUpHours: 24,
   personalContacts: [],
+  trn: "",
+  requireDetails: true,
+  levels: [
+    { name: "Level 1 (best price)", uplift: 0 },
+    { name: "Level 2", uplift: 4 },
+    { name: "Level 3", uplift: 9 },
+  ],
+  levelByCategory: {},
+  newCustomerLevel: 3,
+  firstOrderOffer: true,
+  firstOrderLevel: 1,
 };
 
 const SCHEMA = `
@@ -245,7 +309,37 @@ CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS orders (
+  id INTEGER PRIMARY KEY,
+  ref TEXT NOT NULL,
+  enquiry_id INTEGER NOT NULL REFERENCES enquiries(id),
+  customer_id INTEGER NOT NULL REFERENCES customers(id),
+  quote_ref TEXT,
+  brand TEXT NOT NULL,
+  lines TEXT NOT NULL,
+  subtotal REAL NOT NULL,
+  status TEXT NOT NULL DEFAULT 'confirmed',
+  created_at TEXT NOT NULL
+);
 `;
+
+/** Columns added after the first release; an older database gets them on start. */
+const ADDED_COLUMNS: [table: string, column: string, definition: string][] = [
+  ["customers", "company", "TEXT"],
+  ["customers", "emirate", "TEXT"],
+  ["customers", "area", "TEXT"],
+  ["customers", "trn", "TEXT"],
+  ["customers", "trn_problem", "TEXT"],
+  ["customers", "level", "INTEGER"],
+  ["customers", "type", "TEXT NOT NULL DEFAULT 'customer'"],
+  ["customers", "details_asked", "INTEGER NOT NULL DEFAULT 0"],
+  ["items", "brand", "TEXT"],
+  ["items", "reseller_price", "REAL"],
+  ["items", "margin_customer", "REAL"],
+  ["items", "margin_reseller", "REAL"],
+  ["items", "remark", "TEXT"],
+  ["suppliers", "brands", "TEXT NOT NULL DEFAULT ''"],
+];
 
 type Row = Record<string, unknown>;
 
@@ -259,6 +353,10 @@ export class Db {
     this.sql = new DatabaseSync(path);
     this.sql.exec("PRAGMA foreign_keys = ON;");
     this.sql.exec(SCHEMA);
+    for (const [table, column, definition] of ADDED_COLUMNS) {
+      const columns = this.sql.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+      if (!columns.some((c) => c.name === column)) this.sql.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    }
   }
 
   private iso(): string {
@@ -320,6 +418,17 @@ export class Db {
       this.run("DELETE FROM messages WHERE customer_id = ?", customer.id);
       this.run("DELETE FROM customers WHERE id = ?", customer.id);
     }
+  }
+
+  updateCustomer(id: number, details: CustomerDetails): void {
+    const keys = Object.keys(details) as (keyof CustomerDetails)[];
+    if (keys.length === 0) return;
+    this.run(`UPDATE customers SET ${keys.map((k) => `${k} = ?`).join(", ")} WHERE id = ?`, ...keys.map((k) => details[k] ?? null), id);
+  }
+
+  /** True once the customer has accepted a quote. */
+  hasOrdered(customerId: number): boolean {
+    return Boolean(this.get("SELECT id FROM enquiries WHERE customer_id = ? AND status = 'won' LIMIT 1", customerId));
   }
 
   getCustomer(id: number): Customer | undefined {
@@ -484,24 +593,26 @@ export class Db {
 
   // Suppliers
 
-  addSupplier(supplier: Omit<Supplier, "id" | "active" | "last_inbound_at">): Supplier {
+  addSupplier(supplier: Omit<Supplier, "id" | "active" | "last_inbound_at" | "brands"> & { brands?: string }): Supplier {
     const id = this.run(
-      "INSERT INTO suppliers (name, phone, email, categories) VALUES (?, ?, ?, ?)",
+      "INSERT INTO suppliers (name, phone, email, categories, brands) VALUES (?, ?, ?, ?, ?)",
       supplier.name,
       supplier.phone,
       supplier.email,
       supplier.categories,
+      supplier.brands ?? "",
     );
     return this.get<Supplier>("SELECT * FROM suppliers WHERE id = ?", id)!;
   }
 
   updateSupplier(id: number, supplier: Omit<Supplier, "id" | "last_inbound_at">): void {
     this.run(
-      "UPDATE suppliers SET name = ?, phone = ?, email = ?, categories = ?, active = ? WHERE id = ?",
+      "UPDATE suppliers SET name = ?, phone = ?, email = ?, categories = ?, brands = ?, active = ? WHERE id = ?",
       supplier.name,
       supplier.phone,
       supplier.email,
       supplier.categories,
+      supplier.brands,
       supplier.active,
       id,
     );
@@ -567,6 +678,34 @@ export class Db {
     } else {
       this.run("UPDATE supplier_requests SET status = ? WHERE id = ?", status, id);
     }
+  }
+
+  // Orders, one per brand of an accepted quote
+
+  addOrder(order: Pick<Order, "enquiry_id" | "customer_id" | "quote_ref" | "brand" | "subtotal"> & { lines: unknown[] }): Order {
+    const row = this.get<{ n: number }>("SELECT COUNT(*) AS n FROM orders");
+    const ref = `SO-${String((row?.n ?? 0) + 1).padStart(4, "0")}`;
+    const id = this.run(
+      "INSERT INTO orders (ref, enquiry_id, customer_id, quote_ref, brand, lines, subtotal, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'confirmed', ?)",
+      ref,
+      order.enquiry_id,
+      order.customer_id,
+      order.quote_ref,
+      order.brand,
+      JSON.stringify(order.lines),
+      order.subtotal,
+      this.iso(),
+    );
+    return this.get<Order>("SELECT * FROM orders WHERE id = ?", id)!;
+  }
+
+  orders(brand?: string): (Order & { phone: string; name: string | null; company: string | null })[] {
+    const base = "SELECT o.*, c.phone, c.name, c.company FROM orders o JOIN customers c ON c.id = o.customer_id";
+    return brand ? this.all(`${base} WHERE o.brand = ? ORDER BY o.id DESC`, brand) : this.all(`${base} ORDER BY o.id DESC`);
+  }
+
+  setOrderStatus(id: number, status: Order["status"]): void {
+    this.run("UPDATE orders SET status = ? WHERE id = ?", status, id);
   }
 
   // Drafts waiting for the owner's approval
