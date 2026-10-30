@@ -7,7 +7,7 @@ import { createQuote } from "./estimate.js";
 import { runCustomerFollowups, runSupplierChecks } from "./followup.js";
 import { gatherRequirements } from "./gatherer.js";
 import { checkPrices } from "./priceChecker.js";
-import { priceItems } from "./pricing.js";
+import { priceItems, priceWarnings } from "./pricing.js";
 import { writeReply } from "./reception.js";
 import { askSuppliers, handleSupplierReply } from "./supplier.js";
 
@@ -251,10 +251,14 @@ export class Coordinator {
       return;
     }
     const quote = await createQuote(this.ctx, enquiry, customer, priced);
-    if (settings.requireApproval) {
+    const warnings = priceWarnings(db.items(enquiry.id), priced);
+    if (settings.requireApproval || warnings.length > 0) {
       db.addDraft({ enquiry_id: enquiry.id, kind: "quote", to_phone: customer.phone, body: quote.body });
-      db.setStatus(enquiry.id, "awaiting_approval");
-      await this.notifyOwner(`Quote ${quote.ref} for ${customer.name ?? customer.phone} (${money(quote.total, settings)}) is waiting for your approval.`);
+      db.setStatus(enquiry.id, "awaiting_approval", warnings.length ? `Check prices: ${warnings.join("; ")}` : undefined);
+      await this.notifyOwner(
+        `Quote ${quote.ref} for ${customer.name ?? customer.phone} (${money(quote.total, settings)}) is waiting for your approval.` +
+          (warnings.length ? ` Please check: ${warnings.join("; ")}.` : ""),
+      );
       return;
     }
     await this.send(customer, enquiry.id, quote.body);

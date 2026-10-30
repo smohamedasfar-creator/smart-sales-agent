@@ -55,6 +55,25 @@ export function unitPrice(item: Item, settings: Settings, customerPhone: string)
   return null;
 }
 
+/**
+ * Prices that look wrong and must be checked by the owner before the quote goes out, even when approval is off.
+ * A supplier's price is read by AI from their message, so a typo or a misleading message must never reach a customer unseen.
+ */
+export function priceWarnings(items: Item[], priced: PricedQuote): string[] {
+  const warnings: string[] = [];
+  for (const item of items) {
+    if (item.source !== "supplier" || item.cost == null || !(item.list_price && item.list_price > 0)) continue;
+    if (item.cost < item.list_price * 0.3 || item.cost > item.list_price * 3) {
+      warnings.push(`${item.matched_name ?? item.description}: supplier cost ${item.cost} is far from the price list's ${item.list_price}`);
+    }
+  }
+  for (const line of priced.lines) {
+    if (!(line.unitPrice > 0)) warnings.push(`${line.name}: unit price is ${line.unitPrice}`);
+    if (line.quantity > 10_000) warnings.push(`${line.name}: quantity ${line.quantity} is unusually large`);
+  }
+  return warnings;
+}
+
 export function priceItems(items: Item[], settings: Settings, customerPhone: string): PricedQuote {
   const lines: QuoteLine[] = [];
   const unavailable: Item[] = [];

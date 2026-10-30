@@ -208,9 +208,14 @@ async function loadSuppliers() {
   const rows = await api("/suppliers");
   $("supplier-table").innerHTML = `<tr><th>#</th><th>Name</th><th>WhatsApp</th><th>Email</th><th>Categories</th><th>Active</th></tr>` +
     rows.map((s) => `<tr><td>${s.id}</td><td>${esc(s.name)}</td><td>${esc(s.phone || "")}</td><td>${esc(s.email || "")}</td><td>${esc(s.categories || "all")}</td>
-      <td><input type="checkbox" style="width:auto" ${s.active ? "checked" : ""} onchange='toggleSupplier(${JSON.stringify(s)}, this.checked)'></td></tr>`).join("");
+      <td><input type="checkbox" style="width:auto" ${s.active ? "checked" : ""} onchange="toggleSupplier(${Number(s.id)}, this.checked)"></td></tr>`).join("");
+  supplierRows = rows;
 }
-async function toggleSupplier(s, active) { await api(`/suppliers/${s.id}`, { method: "PUT", body: { ...s, active } }); }
+let supplierRows = [];
+async function toggleSupplier(id, active) {
+  const s = supplierRows.find((row) => row.id === id);
+  if (s) await api(`/suppliers/${id}`, { method: "PUT", body: { ...s, active } });
+}
 $("add-supplier").addEventListener("click", async () => {
   await api("/suppliers", { method: "POST", body: { name: $("s-name").value, phone: $("s-phone").value.replace(/\D/g, ""), email: $("s-email").value, categories: $("s-categories").value } });
   ["s-name", "s-phone", "s-email", "s-categories"].forEach((id) => ($(id).value = ""));

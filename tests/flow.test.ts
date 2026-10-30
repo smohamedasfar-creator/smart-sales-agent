@@ -134,6 +134,26 @@ describe("enquiry to order", () => {
     expect(t.whatsapp.templates).toHaveLength(1);
   });
 
+  it("holds a quote for the owner when a supplier price looks wrong, even with approval off", async () => {
+    const t = setup();
+    t.db.saveSettings({ ...t.db.getSettings(), requireApproval: false });
+    t.db.addSupplier({ name: "Gulf Fittings", phone: SUPPLIER, email: null, categories: "" });
+    t.llm.handlers.coordinator = () => ({ intent: "new_enquiry" });
+    t.llm.handlers.gatherer = pipesAndElbows;
+    t.llm.handlers["price-checker"] = matchByKeyword;
+    await t.coordinator.onWhatsApp(fromCustomer("50 pipes and 20 elbows, 4 inch"));
+
+    // The elbow lists at 3.20; a reply of 0.05 each is far too low to trust.
+    const elbowId = t.db.items(1).find((i) => i.description.includes("elbow"))!.id;
+    t.llm.handlers.supplier = () => ({ answered: true, quotes: [{ item_id: elbowId, available: true, unit_cost: 0.05, note: "" }] });
+    await t.coordinator.onWhatsApp({ id: "wamid.s9", from: SUPPLIER, name: null, text: "elbow 0.05 each" });
+
+    expect(t.db.getEnquiry(1)!.status).toBe("awaiting_approval");
+    expect(t.db.getEnquiry(1)!.notes).toContain("far from the price list");
+    expect(t.whatsapp.sent.filter((m) => m.to === CUSTOMER).some((m) => m.body.includes("Quotation"))).toBe(false);
+    expect(t.whatsapp.sent.find((m) => m.to === OWNER)!.body).toContain("Please check");
+  });
+
   it("stops waiting for a silent supplier and quotes what is available", async () => {
     const t = setup();
     t.db.saveSettings({ ...t.db.getSettings(), requireApproval: false });
