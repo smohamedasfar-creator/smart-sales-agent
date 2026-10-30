@@ -47,6 +47,14 @@ to that customer until you click **Let the agents continue** in the dashboard.
 - Costs and margins are never shown to customers.
 - Webhook calls are checked with Meta's signature, and the dashboard needs a password.
 
+## Workflow demo (in the browser, nothing to install)
+
+`demo/index.html` is a one-page copy of the flow for trying it out: you chat as the customer and as the supplier, watch
+each agent work, approve the quote, and move the clock forward to see follow-ups and supplier reminders. It uses the same
+prompts, catalog search, pricing and quotation format as the app, with example items and suppliers instead of your Excel
+or Zoho data. Published as a Claude artifact, its AI agents run on Claude; anywhere else they fall back to simple rules.
+Nothing is sent to WhatsApp, suppliers or Zoho.
+
 ## Try it on your computer (no WhatsApp needed)
 
 You need [Node.js](https://nodejs.org) 22.13 or newer and a Claude API key from https://console.anthropic.com.
