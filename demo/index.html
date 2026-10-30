@@ -315,6 +315,19 @@
           <div class="tablewrap"><table id="personal"></table></div>
           <button class="btn" type="button" id="add-personal" style="margin-top: 8px">Add personal contact</button>
         </div>
+        <div class="card" id="levels-card">
+          <h2>Customer levels</h2>
+          <p class="muted">Level 1 always gets the best price. Each other level pays a percentage more. Set it once here, and change it for any category in the table below; a blank box uses the level's own figure.</p>
+          <div id="levels-review"></div>
+          <div class="tablewrap"><table id="levels"></table></div>
+          <div class="row" style="margin-top: 8px">
+            <button class="btn" type="button" id="add-level">Add level</button>
+            <label class="muted" for="new-level">New customers start at</label>
+            <select id="new-level" class="btn small"></select>
+          </div>
+          <h3 style="margin-top: 14px">By category</h3>
+          <div class="tablewrap"><table id="level-categories"></table></div>
+        </div>
         <div class="card">
           <h2>Margins</h2>
           <p class="muted">Used when a price is worked out from cost: items from a supplier, or every item when "Price from" is "Cost + margin". The first one set wins: the item's own margin (from your list), then its category's, then its brand's (on the Brands tab), then the default.</p>
@@ -342,15 +355,15 @@ const START = (() => { const d = new Date(); d.setHours(9, 0, 0, 0); return d.ge
 
 /** A number that isn't in your contacts: name, company and emirate still to ask. */
 function newCustomer() {
-  return { id: 1, phone: "971551234567", name: null, company: null, emirate: null, area: null, trn: null, trnProblem: null, type: "customer", detailsAsked: false, last_inbound_at: null };
+  return { id: 1, phone: "971551234567", name: null, company: null, emirate: null, area: null, trn: null, trnProblem: null, level: null, type: "customer", detailsAsked: false, last_inbound_at: null };
 }
 function knownCustomer() {
-  return { id: 1, phone: "971501234567", name: "Rashid", company: "Al Noor Electricals", emirate: "Dubai", area: "Al Quoz", trn: "100234567800003", trnProblem: null, type: "customer", detailsAsked: true, last_inbound_at: null };
+  return { id: 1, phone: "971501234567", name: "Rashid", company: "Al Noor Electricals", emirate: "Dubai", area: "Al Quoz", trn: "100234567800003", trnProblem: null, level: 1, type: "customer", detailsAsked: true, last_inbound_at: null };
 }
 
 function freshState() {
   return {
-    v: 5,
+    v: 6,
     now: START,
     nextId: 100, // above the example suppliers' ids
     useClaude: true,
@@ -362,6 +375,11 @@ function freshState() {
       tone: "Polite, warm and professional, like an experienced senior sales and customer service executive. Greet the customer by name, thank them, and use simple, clear English.",
       requireApproval: true,
       requireDetails: true, // quotes go out only once name, company and emirate are known
+      // Customer levels: Level 1 gets the best price; each other level pays this much more, unless its category says otherwise.
+      levels: [{ name: "Level 1 (best price)", uplift: 0 }, { name: "Level 2", uplift: 4 }, { name: "Level 3", uplift: 9 }],
+      levelByCategory: {}, // { "SWITCH": { "2": 3, "3": 8 } }
+      newCustomerLevel: 3,
+      levelsToReview: false,
       margin: { priceBasis: "list", defaultPercent: 15, byBrand: { Pegler: 20 }, byCategory: {}, byCustomer: {}, roundTo: 0 },
       taxPercent: 5,
       quoteValidityDays: 7,
@@ -402,7 +420,7 @@ function freshState() {
 
 let S = load() || freshState();
 function load() {
-  try { const s = JSON.parse(localStorage.getItem("ssa-demo") || "null"); return s && s.v === 5 ? s : null; } catch { return null; }
+  try { const s = JSON.parse(localStorage.getItem("ssa-demo") || "null"); return s && s.v === 6 ? s : null; } catch { return null; }
 }
 function save() { try { localStorage.setItem("ssa-demo", JSON.stringify(S)); } catch {} }
 const id = () => S.nextId++;
@@ -499,6 +517,10 @@ Reply with only JSON: {"name": null, "company": null, "emirate": null, "area": n
     got.push(`TRN "${t.problem}" is ${t.problem.length} digits, not 15; asking the customer to check it`);
   }
   if (got.length) log("Customer Details", `Saved ${got.join(", ")}.${missingDetails().length ? ` Still needed: ${listText(missingDetails())}.` : " All details known."}`);
+  if (got.length && !missingDetails().length && S.customer.level == null) {
+    S.customer.level = S.settings.newCustomerLevel;
+    notifyOwner(`New customer: ${custFull()}. They are on ${levelName(custLevel())}; change it on the Agents panel if they should get better prices.`);
+  }
   return got.length > 0;
 }
 function ruleDetails(texts) {
@@ -633,7 +655,29 @@ function marginFor(item) {
 }
 function roundUp(v, step) { return step <= 0 ? round2(v) : round2(Math.ceil(v / step - 1e-9) * step); }
 /** The selling price and how it was worked out. Resellers get reseller prices and margins, end customers customer ones. */
+const custLevel = () => Math.min(S.customer.level ?? S.settings.newCustomerLevel, S.settings.levels.length) || 1;
+const levelName = (n) => (S.settings.levels[n - 1] || {}).name || `Level ${n}`;
+const catKey = (cat, map) => (cat ? Object.keys(map).find((k) => k.toLowerCase() === cat.toLowerCase()) || cat : null);
+/** How much more a level pays for an item: its category's figure if set, otherwise the level's own. */
+function levelUplift(item, level) {
+  const st = S.settings;
+  const key = catKey(item.category, st.levelByCategory);
+  const own = key && st.levelByCategory[key] && st.levelByCategory[key][level];
+  return own != null && own !== "" ? Number(own) : Number((st.levels[level - 1] || {}).uplift || 0);
+}
+
+/** The price for this customer: the best (Level 1) price, plus the customer's level percentage. */
 function priceDetail(item) {
+  const base = basePrice(item);
+  if (!base) return null;
+  const level = custLevel();
+  const up = levelUplift(item, level);
+  if (!up) return { price: base.price, how: `${base.how}; ${levelName(level)}` };
+  return { price: roundUp(base.price * (1 + up / 100), S.settings.margin.roundTo), how: `${base.how}; ${levelName(level)} +${up}%${((S.settings.levelByCategory[catKey(item.category, S.settings.levelByCategory)] || {})[level] ?? "") !== "" ? ` (${item.category} rate)` : ""}` };
+}
+
+/** The best (Level 1) selling price and how it was worked out. */
+function basePrice(item) {
   const m = S.settings.margin;
   if (item.available !== 1) return null;
   const reseller = S.customer.type === "reseller";
@@ -1477,7 +1521,9 @@ function render() {
   put($("#agents"), ...AGENTS.map(([n, k]) => el("div", { class: `agent${working === n ? " working" : ""}` }, el("b", {}, n), el("span", { class: "kind" }, k))));
   const e = db.openEnquiry() || db.latestEnquiry();
   const miss = missingDetails();
-  put($("#cust"), el("b", {}, custFull()), ` · +${S.customer.phone}`, miss.length ? el("span", { class: "tag missing", style: "margin-left: 6px" }, `Still to ask: ${listText(miss)}`) : el("span", { class: "tag stock", style: "margin-left: 6px" }, "Details known"));
+  put($("#cust"), el("b", {}, custFull()), ` · +${S.customer.phone} · `,
+    el("select", { class: "btn small", "aria-label": "Customer level", onchange: (ev) => setCustomerLevel(Number(ev.target.value)) },
+      ...S.settings.levels.map((lv, n) => el("option", { value: n + 1, selected: custLevel() === n + 1 }, lv.name + (S.customer.level == null && n + 1 === custLevel() ? " (new customer)" : "")))), miss.length ? el("span", { class: "tag missing", style: "margin-left: 6px" }, `Still to ask: ${listText(miss)}`) : el("span", { class: "tag stock", style: "margin-left: 6px" }, "Details known"));
   $("#enq-ref").textContent = e ? `E${e.id}${e.quote_ref ? ` · ${e.quote_ref}` : ""}` : "";
   const order = STEPS.map((s) => s[0]);
   const at = e ? order.indexOf(e.status) : -1;
@@ -1537,7 +1583,7 @@ function render() {
   const drafts = S.drafts.filter((d) => d.status === "pending");
   put($("#drafts"), ...(drafts.length ? drafts.map((d) => {
     const ta = el("textarea", { id: `draft-${d.id}`, "aria-label": "Quotation text" }, d.body);
-    return el("div", { class: "draft stack" }, el("div", { class: "muted" }, `Enquiry E${d.enquiry_id} · to ${custFull()} (+${S.customer.phone})`), ta,
+    return el("div", { class: "draft stack" }, el("div", { class: "muted" }, `Enquiry E${d.enquiry_id} · to ${custFull()} (+${S.customer.phone}) · ${levelName(custLevel())}`), ta,
       el("div", { class: "row" },
         el("button", { class: "btn primary", type: "button", onclick: () => approveDraft(d.id, ta.value) }, "Approve and send"),
         el("button", { class: "btn danger", type: "button", onclick: () => rejectDraft(d.id) }, "Reject and handle myself")));
@@ -1616,6 +1662,7 @@ async function uploadExcel(file) {
     S.catalogNotes = notes.join("\n").slice(0, 3000);
     S.catalogSource = { file: file.name, sheet: used.join(", ") };
     addMissingBrandSuppliers();
+    S.settings.levelsToReview = true;
     log("Price & Stock", `Loaded ${items.length} items from ${file.name}: ${used.join(", ")}. Brands: ${allBrands().join(", ")}.`);
     save(); renderSetup(); render();
   } catch (e) {
@@ -1739,6 +1786,21 @@ function switchCustomer(kind) {
   save(); renderSetup(); render();
 }
 
+/** A quote waiting for approval is worked out again after a level or price change. */
+function repriceDraft() {
+  const d = S.drafts.find((x) => x.status === "pending");
+  if (!d) return;
+  const e = db.getEnquiry(d.enquiry_id);
+  d.status = "rejected";
+  serial(async () => { log("Pricing & Margin", `Prices changed: working out ${e.quote_ref} again for ${levelName(custLevel())}.`); await quote(e); });
+}
+function setCustomerLevel(n) {
+  S.customer.level = n;
+  log("Owner", `${custLabel()} is now on ${levelName(n)}.`);
+  repriceDraft();
+  save(); render();
+}
+
 function renderSetup() {
   const cat = $("#catalog");
   // A blank box means "not in the list" (no price, no cost, or stock not tracked).
@@ -1756,6 +1818,32 @@ function renderSetup() {
     S.personal.length ? null : el("tr", {}, el("td", { class: "empty", colspan: 3 }, "No personal contacts yet.")));
   const m = S.settings.margin;
   const cats = [...new Map(S.catalog.filter((c) => c.category).map((c) => [c.category.toLowerCase(), c])).values()].sort((a, b) => (a.brand || "").localeCompare(b.brand || "") || a.category.localeCompare(b.category));
+  // Customer levels
+  const ls = S.settings;
+  put($("#levels-review"), ls.levelsToReview ? el("div", { class: "alert", style: "margin-bottom: 10px" },
+    `Your price list was loaded with ${cats.length} categories. Please check the level percentages for each category below. They start from the level figures.`, " ",
+    el("button", { class: "btn small primary", type: "button", onclick: () => { ls.levelsToReview = false; log("Owner", "Checked the customer level prices."); save(); renderSetup(); render(); } }, "Done, prices look right")) : null);
+  put($("#levels"),
+    el("tr", {}, el("th", {}, "Level"), el("th", {}, "Name"), el("th", { class: "num" }, "% above Level 1"), el("th", {}, "")),
+    ...ls.levels.map((lv, n) => el("tr", {}, el("td", {}, `${n + 1}`),
+      el("td", {}, el("input", { type: "text", value: lv.name, "aria-label": `Name of level ${n + 1}`, onchange: (ev) => { lv.name = ev.target.value.trim() || `Level ${n + 1}`; save(); renderSetup(); render(); } })),
+      el("td", { class: "num" }, n === 0 ? "0 (best price)" : el("input", { type: "number", step: "any", min: 0, value: lv.uplift, "aria-label": `Percent for level ${n + 1}`, style: "width: 80px", onchange: (ev) => { lv.uplift = Number(ev.target.value) || 0; repriceDraft(); save(); renderSetup(); render(); } })),
+      el("td", {}, n > 2 && n === ls.levels.length - 1 ? el("button", { class: "btn small danger", type: "button", onclick: () => { ls.levels.pop(); save(); renderSetup(); render(); } }, "Remove") : null))));
+  put($("#new-level"), ...ls.levels.map((lv, n) => el("option", { value: n + 1, selected: ls.newCustomerLevel === n + 1 }, lv.name)));
+  put($("#level-categories"),
+    el("tr", {}, el("th", {}, "Category"), el("th", {}, "Brands"), ...ls.levels.slice(1).map((lv) => el("th", { class: "num" }, `${lv.name} %`))),
+    ...(cats.length ? cats.map((c) => {
+      const key = catKey(c.category, ls.levelByCategory);
+      const brands = [...new Set(S.catalog.filter((x) => (x.category || "").toLowerCase() === c.category.toLowerCase()).map((x) => x.brand).filter(Boolean))].join(", ");
+      return el("tr", {}, el("td", {}, c.category), el("td", {}, brands),
+        ...ls.levels.slice(1).map((lv, i) => {
+          const level = String(i + 2);
+          const v = ls.levelByCategory[key] && ls.levelByCategory[key][level];
+          return el("td", { class: "num" }, el("input", { type: "number", step: "any", min: 0, placeholder: String(lv.uplift), value: v, "aria-label": `${lv.name} percent for ${c.category}`, style: "width: 70px",
+            onchange: (ev) => { const row = (ls.levelByCategory[key] = ls.levelByCategory[key] || {}); if (ev.target.value === "") delete row[level]; else row[level] = Number(ev.target.value); repriceDraft(); save(); render(); } }));
+        }));
+    }) : [el("tr", {}, el("td", { class: "empty" }, "Categories appear here from your price list."))]));
+
   put($("#category-margins"),
     el("tr", {}, el("th", {}, "Category"), el("th", {}, "Brands"), el("th", { class: "num" }, "Items"), el("th", { class: "num" }, "With own margin"), el("th", { class: "num" }, "Category margin %")),
     ...cats.map((c) => {
@@ -1836,6 +1924,8 @@ $("#sup-msg").addEventListener("keydown", (ev) => { if (ev.key === "Enter" && !e
 $("#sup-pick").addEventListener("change", (ev) => { supplierPick = Number(ev.target.value); render(); });
 $("#excel-file").addEventListener("change", (ev) => { const f = ev.target.files[0]; ev.target.value = ""; if (f) uploadExcel(f); });
 $("#use-example").addEventListener("click", () => { const f = freshState(); S.catalog = f.catalog; S.suppliers = f.suppliers; S.catalogSource = null; S.catalogNotes = ""; save(); renderSetup(); render(); });
+$("#add-level").addEventListener("click", () => { const lv = S.settings.levels; lv.push({ name: `Level ${lv.length + 1}`, uplift: (lv[lv.length - 1].uplift || 0) + 5 }); save(); renderSetup(); render(); });
+$("#new-level").addEventListener("change", (ev) => { S.settings.newCustomerLevel = Number(ev.target.value); save(); render(); });
 $("#sender").addEventListener("change", (ev) => { sender = ev.target.value; render(); });
 $("#add-personal").addEventListener("click", () => { S.personal.push({ phone: "", name: "New contact" }); save(); renderSetup(); });
 $("#order-brand").addEventListener("change", (ev) => { orderBrand = ev.target.value; render(); });
