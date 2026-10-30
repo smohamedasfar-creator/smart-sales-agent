@@ -325,6 +325,7 @@
             <label class="muted" for="new-level">New customers start at</label>
             <select id="new-level" class="btn small"></select>
           </div>
+          <div class="form" id="first-order" style="margin-top: 12px"></div>
           <h3 style="margin-top: 14px">By category</h3>
           <div class="tablewrap"><table id="level-categories"></table></div>
         </div>
@@ -355,15 +356,15 @@ const START = (() => { const d = new Date(); d.setHours(9, 0, 0, 0); return d.ge
 
 /** A number that isn't in your contacts: name, company and emirate still to ask. */
 function newCustomer() {
-  return { id: 1, phone: "971551234567", name: null, company: null, emirate: null, area: null, trn: null, trnProblem: null, level: null, type: "customer", detailsAsked: false, last_inbound_at: null };
+  return { id: 1, phone: "971551234567", name: null, company: null, emirate: null, area: null, trn: null, trnProblem: null, level: null, ordered: false, type: "customer", detailsAsked: false, last_inbound_at: null };
 }
 function knownCustomer() {
-  return { id: 1, phone: "971501234567", name: "Rashid", company: "Al Noor Electricals", emirate: "Dubai", area: "Al Quoz", trn: "100234567800003", trnProblem: null, level: 1, type: "customer", detailsAsked: true, last_inbound_at: null };
+  return { id: 1, phone: "971501234567", name: "Rashid", company: "Al Noor Electricals", emirate: "Dubai", area: "Al Quoz", trn: "100234567800003", trnProblem: null, level: 1, ordered: true, type: "customer", detailsAsked: true, last_inbound_at: null };
 }
 
 function freshState() {
   return {
-    v: 6,
+    v: 7,
     now: START,
     nextId: 100, // above the example suppliers' ids
     useClaude: true,
@@ -380,6 +381,10 @@ function freshState() {
       levelByCategory: {}, // { "SWITCH": { "2": 3, "3": 8 } }
       newCustomerLevel: 3,
       levelsToReview: false,
+      // Welcome offer: a new customer's first order is priced at this level, then they move to their own level.
+      firstOrderOffer: true,
+      firstOrderLevel: 1,
+      firstOrderNote: "Welcome offer: you get our best prices on this first order.",
       margin: { priceBasis: "list", defaultPercent: 15, byBrand: { Pegler: 20 }, byCategory: {}, byCustomer: {}, roundTo: 0 },
       taxPercent: 5,
       quoteValidityDays: 7,
@@ -420,7 +425,7 @@ function freshState() {
 
 let S = load() || freshState();
 function load() {
-  try { const s = JSON.parse(localStorage.getItem("ssa-demo") || "null"); return s && s.v === 6 ? s : null; } catch { return null; }
+  try { const s = JSON.parse(localStorage.getItem("ssa-demo") || "null"); return s && s.v === 7 ? s : null; } catch { return null; }
 }
 function save() { try { localStorage.setItem("ssa-demo", JSON.stringify(S)); } catch {} }
 const id = () => S.nextId++;
@@ -519,7 +524,7 @@ Reply with only JSON: {"name": null, "company": null, "emirate": null, "area": n
   if (got.length) log("Customer Details", `Saved ${got.join(", ")}.${missingDetails().length ? ` Still needed: ${listText(missingDetails())}.` : " All details known."}`);
   if (got.length && !missingDetails().length && S.customer.level == null) {
     S.customer.level = S.settings.newCustomerLevel;
-    notifyOwner(`New customer: ${custFull()}. They are on ${levelName(custLevel())}; change it on the Agents panel if they should get better prices.`);
+    notifyOwner(`New customer: ${custFull()}. ${firstOrderOn() ? `Their first order gets ${levelName(custLevel())} prices (welcome offer), then` : "They are on"} ${levelName(normalLevel())}; change it on the Agents panel if needed.`);
   }
   return got.length > 0;
 }
@@ -655,7 +660,12 @@ function marginFor(item) {
 }
 function roundUp(v, step) { return step <= 0 ? round2(v) : round2(Math.ceil(v / step - 1e-9) * step); }
 /** The selling price and how it was worked out. Resellers get reseller prices and margins, end customers customer ones. */
-const custLevel = () => Math.min(S.customer.level ?? S.settings.newCustomerLevel, S.settings.levels.length) || 1;
+/** The customer's own level (from their second order on). */
+const normalLevel = () => Math.min(S.customer.level ?? S.settings.newCustomerLevel, S.settings.levels.length) || 1;
+/** True while the welcome offer gives this customer a better level than their own. */
+const firstOrderOn = () => S.settings.firstOrderOffer && !S.customer.ordered && S.settings.firstOrderLevel < normalLevel();
+/** The level this quote is priced at. */
+const custLevel = () => (firstOrderOn() ? S.settings.firstOrderLevel : normalLevel());
 const levelName = (n) => (S.settings.levels[n - 1] || {}).name || `Level ${n}`;
 const catKey = (cat, map) => (cat ? Object.keys(map).find((k) => k.toLowerCase() === cat.toLowerCase()) || cat : null);
 /** How much more a level pays for an item: its category's figure if set, otherwise the level's own. */
@@ -672,8 +682,9 @@ function priceDetail(item) {
   if (!base) return null;
   const level = custLevel();
   const up = levelUplift(item, level);
-  if (!up) return { price: base.price, how: `${base.how}; ${levelName(level)}` };
-  return { price: roundUp(base.price * (1 + up / 100), S.settings.margin.roundTo), how: `${base.how}; ${levelName(level)} +${up}%${((S.settings.levelByCategory[catKey(item.category, S.settings.levelByCategory)] || {})[level] ?? "") !== "" ? ` (${item.category} rate)` : ""}` };
+  const offer = firstOrderOn() ? " (first-order offer)" : "";
+  if (!up) return { price: base.price, how: `${base.how}; ${levelName(level)}${offer}` };
+  return { price: roundUp(base.price * (1 + up / 100), S.settings.margin.roundTo), how: `${base.how}; ${levelName(level)} +${up}%${offer}${((S.settings.levelByCategory[catKey(item.category, S.settings.levelByCategory)] || {})[level] ?? "") !== "" ? ` (${item.category} rate)` : ""}` };
 }
 
 /** The best (Level 1) selling price and how it was worked out. */
@@ -1070,6 +1081,7 @@ function createQuote(enquiry, priced) {
   if (priced.tax > 0) parts.push(`Subtotal: ${money(priced.subtotal)}`, `VAT ${st.taxPercent}%: ${money(priced.tax)}`);
   parts.push(`*Total: ${money(priced.total)}*`);
   if (priced.unavailable.length) parts.push("", "Not available at the moment:", ...priced.unavailable.map((i) => `- ${i.description}`));
+  if (firstOrderOn() && st.firstOrderNote.trim()) parts.push("", `*${st.firstOrderNote.trim()}*`);
   parts.push("", `Valid for ${st.quoteValidityDays} days. Reply *YES* to confirm the order.`);
   enquiry.quote_ref = ref;
   enquiry.quote_total = priced.total;
@@ -1286,6 +1298,12 @@ async function accept(enquiry) {
     log(brandAgent(brand), `Order ${order.id}: ${lines.map((l) => `${l.quantity} x ${l.name}`).join(", ")} = ${money(subtotal)} before VAT.`);
   }
   notifyOwner(`Order confirmed: ${custFull()} accepted quote ${enquiry.quote_ref} (${money(enquiry.quote_total || 0)}). By brand: ${made.map((o) => `${o.brand} ${o.id} ${money(o.subtotal)}`).join("; ")}.`);
+  if (!S.customer.ordered) {
+    const hadOffer = firstOrderOn();
+    S.customer.ordered = true;
+    if (S.customer.level == null) S.customer.level = S.settings.newCustomerLevel;
+    if (hadOffer) log("Pricing & Margin", `${custLabel()}'s first order was at the welcome price. Their next quotes use ${levelName(normalLevel())}.`);
+  }
 }
 
 function facts(enquiry) {
@@ -1523,7 +1541,8 @@ function render() {
   const miss = missingDetails();
   put($("#cust"), el("b", {}, custFull()), ` · +${S.customer.phone} · `,
     el("select", { class: "btn small", "aria-label": "Customer level", onchange: (ev) => setCustomerLevel(Number(ev.target.value)) },
-      ...S.settings.levels.map((lv, n) => el("option", { value: n + 1, selected: custLevel() === n + 1 }, lv.name + (S.customer.level == null && n + 1 === custLevel() ? " (new customer)" : "")))), miss.length ? el("span", { class: "tag missing", style: "margin-left: 6px" }, `Still to ask: ${listText(miss)}`) : el("span", { class: "tag stock", style: "margin-left: 6px" }, "Details known"));
+      ...S.settings.levels.map((lv, n) => el("option", { value: n + 1, selected: normalLevel() === n + 1 }, lv.name + (S.customer.level == null && n + 1 === normalLevel() ? " (new customer)" : "")))),
+    firstOrderOn() ? el("span", { class: "tag supplier", style: "margin-left: 6px" }, `First order at ${levelName(custLevel())}`) : null, miss.length ? el("span", { class: "tag missing", style: "margin-left: 6px" }, `Still to ask: ${listText(miss)}`) : el("span", { class: "tag stock", style: "margin-left: 6px" }, "Details known"));
   $("#enq-ref").textContent = e ? `E${e.id}${e.quote_ref ? ` · ${e.quote_ref}` : ""}` : "";
   const order = STEPS.map((s) => s[0]);
   const at = e ? order.indexOf(e.status) : -1;
@@ -1829,6 +1848,11 @@ function renderSetup() {
       el("td", {}, el("input", { type: "text", value: lv.name, "aria-label": `Name of level ${n + 1}`, onchange: (ev) => { lv.name = ev.target.value.trim() || `Level ${n + 1}`; save(); renderSetup(); render(); } })),
       el("td", { class: "num" }, n === 0 ? "0 (best price)" : el("input", { type: "number", step: "any", min: 0, value: lv.uplift, "aria-label": `Percent for level ${n + 1}`, style: "width: 80px", onchange: (ev) => { lv.uplift = Number(ev.target.value) || 0; repriceDraft(); save(); renderSetup(); render(); } })),
       el("td", {}, n > 2 && n === ls.levels.length - 1 ? el("button", { class: "btn small danger", type: "button", onclick: () => { ls.levels.pop(); save(); renderSetup(); render(); } }, "Remove") : null))));
+  put($("#first-order"),
+    el("label", { class: "check" }, el("input", { type: "checkbox", checked: ls.firstOrderOffer, onchange: (ev) => { ls.firstOrderOffer = ev.target.checked; repriceDraft(); save(); renderSetup(); render(); } }), "Welcome offer: a new customer's first order is priced at"),
+    el("label", {}, "Level for the first order", el("select", { onchange: (ev) => { ls.firstOrderLevel = Number(ev.target.value); repriceDraft(); save(); render(); } },
+      ...ls.levels.map((lv, n) => el("option", { value: n + 1, selected: ls.firstOrderLevel === n + 1 }, lv.name)))),
+    el("label", { style: "grid-column: 1 / -1" }, "Line on the quotation", el("input", { type: "text", value: ls.firstOrderNote, onchange: (ev) => { ls.firstOrderNote = ev.target.value; repriceDraft(); save(); } })));
   put($("#new-level"), ...ls.levels.map((lv, n) => el("option", { value: n + 1, selected: ls.newCustomerLevel === n + 1 }, lv.name)));
   put($("#level-categories"),
     el("tr", {}, el("th", {}, "Category"), el("th", {}, "Brands"), ...ls.levels.slice(1).map((lv) => el("th", { class: "num" }, `${lv.name} %`))),
