@@ -383,8 +383,7 @@ function freshState() {
       levelsToReview: false,
       // Welcome offer: a new customer's first order is priced at this level, then they move to their own level.
       firstOrderOffer: true,
-      firstOrderLevel: 1,
-      firstOrderNote: "Welcome offer: you get our best prices on this first order.",
+      firstOrderLevel: 1, // the customer is not told; they simply get the better price
       margin: { priceBasis: "list", defaultPercent: 15, byBrand: { Pegler: 20 }, byCategory: {}, byCustomer: {}, roundTo: 0 },
       taxPercent: 5,
       quoteValidityDays: 7,
@@ -1081,7 +1080,6 @@ function createQuote(enquiry, priced) {
   if (priced.tax > 0) parts.push(`Subtotal: ${money(priced.subtotal)}`, `VAT ${st.taxPercent}%: ${money(priced.tax)}`);
   parts.push(`*Total: ${money(priced.total)}*`);
   if (priced.unavailable.length) parts.push("", "Not available at the moment:", ...priced.unavailable.map((i) => `- ${i.description}`));
-  if (firstOrderOn() && st.firstOrderNote.trim()) parts.push("", `*${st.firstOrderNote.trim()}*`);
   parts.push("", `Valid for ${st.quoteValidityDays} days. Reply *YES* to confirm the order.`);
   enquiry.quote_ref = ref;
   enquiry.quote_total = priced.total;
@@ -1851,8 +1849,7 @@ function renderSetup() {
   put($("#first-order"),
     el("label", { class: "check" }, el("input", { type: "checkbox", checked: ls.firstOrderOffer, onchange: (ev) => { ls.firstOrderOffer = ev.target.checked; repriceDraft(); save(); renderSetup(); render(); } }), "Welcome offer: a new customer's first order is priced at"),
     el("label", {}, "Level for the first order", el("select", { onchange: (ev) => { ls.firstOrderLevel = Number(ev.target.value); repriceDraft(); save(); render(); } },
-      ...ls.levels.map((lv, n) => el("option", { value: n + 1, selected: ls.firstOrderLevel === n + 1 }, lv.name)))),
-    el("label", { style: "grid-column: 1 / -1" }, "Line on the quotation", el("input", { type: "text", value: ls.firstOrderNote, onchange: (ev) => { ls.firstOrderNote = ev.target.value; repriceDraft(); save(); } })));
+      ...ls.levels.map((lv, n) => el("option", { value: n + 1, selected: ls.firstOrderLevel === n + 1 }, lv.name)))));
   put($("#new-level"), ...ls.levels.map((lv, n) => el("option", { value: n + 1, selected: ls.newCustomerLevel === n + 1 }, lv.name)));
   put($("#level-categories"),
     el("tr", {}, el("th", {}, "Category"), el("th", {}, "Brands"), ...ls.levels.slice(1).map((lv) => el("th", { class: "num" }, `${lv.name} %`))),
