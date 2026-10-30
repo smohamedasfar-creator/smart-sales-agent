@@ -26,7 +26,7 @@
   .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   .muted { color: var(--muted); font-size: 13px; }
   .badge { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 12px; border: 1px solid var(--line); }
-  .badge.needs_human, .badge.awaiting_approval { color: var(--warn); border-color: var(--warn); }
+  .badge.needs_human, .badge.awaiting_approval, .badge.awaiting_details { color: var(--warn); border-color: var(--warn); }
   .badge.won { color: var(--accent); border-color: var(--accent); }
   .badge.lost { color: var(--bad); border-color: var(--bad); }
   textarea, input, select { width: 100%; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
@@ -57,6 +57,7 @@
     <button data-tab="enquiries">Enquiries</button>
     <button data-tab="suppliers">Suppliers</button>
     <button data-tab="settings">Settings</button>
+    <button data-tab="orders">Orders</button>
     <button data-tab="test">Test chat</button>
   </nav>
 </header>
@@ -75,6 +76,7 @@
         <div><label>Name</label><input id="s-name"></div>
         <div><label>WhatsApp number (country code, no +)</label><input id="s-phone" placeholder="971501234567"></div>
         <div><label>Email</label><input id="s-email"></div>
+        <div><label>Brands (comma separated; empty = any brand without its own supplier)</label><input id="s-brands" placeholder="UGREEN, COMMANDO"></div>
         <div><label>Categories (comma separated, empty = all)</label><input id="s-categories"></div>
       </div>
       <p><button class="primary" id="add-supplier">Add supplier</button></p>
@@ -108,11 +110,31 @@
       <label>Margin % by customer number (JSON, e.g. {"971501234567": 8})</label><input id="byCustomer">
       <label>Personal contacts: family, friends and others the agents must never answer (one per line: number, name)</label>
       <textarea id="personalContacts" placeholder="971501234567, Ahmed (brother)"></textarea>
+      <label>Margin % by brand (JSON, e.g. {"UGREEN": 25, "COMMANDO": 20})</label><input id="byBrand">
+      <div class="grid">
+        <div><label>Your TRN (printed on quotations)</label><input id="trn"></div>
+        <div><label>New customers start at level</label><select id="newCustomerLevel"></select></div>
+        <div><label>First order priced at level</label><select id="firstOrderLevel"></select></div>
+      </div>
+      <label><input type="checkbox" id="firstOrderOffer" style="width:auto"> A new customer's first order gets the first-order level (they are not told)</label>
+      <label><input type="checkbox" id="requireDetails" style="width:auto"> Send quotes only after the customer's name, company, emirate and TRN are known</label>
+      <label>Customer levels: one per line, name and % above the best price (the first line is the best price)</label>
+      <textarea id="levels" placeholder="Level 1 (best price), 0&#10;Level 2, 4&#10;Level 3, 9"></textarea>
+      <label>Level % by category (JSON, e.g. {"SWITCH": {"2": 3, "3": 8}}; a category not listed uses the level's own %)</label><input id="levelByCategory">
       <label>Tone of replies</label><input id="tone">
       <label>Business information the agents may share (address, hours, payment and delivery terms)</label>
       <textarea id="businessInfo"></textarea>
       <p><button class="primary" id="save-settings">Save settings</button> <span id="settings-saved" class="muted"></span></p>
     </div>
+  </section>
+
+  <section id="orders" hidden>
+    <div class="card">
+      <div class="row"><strong>Orders by brand</strong>
+        <select id="order-brand" style="width:auto"><option value="">All brands</option></select>
+        <span class="muted">A customer's "yes" becomes one order per brand.</span></div>
+    </div>
+    <div class="card scroll"><table id="order-table"></table></div>
   </section>
 
   <section id="test" hidden>
@@ -179,6 +201,7 @@ async function loadEnquiries() {
 
 async function showEnquiry(id) {
   const d = await api(`/enquiries/${id}`);
+  settingsCache = settingsCache || (await api("/settings"));
   const items = d.items.map((i) => `<tr><td>${esc(i.quantity)} ${esc(i.unit || "")}</td><td>${esc(i.description)}<div class="muted">${esc(i.matched_name || "not matched")}</div></td>
     <td>${i.available === 1 ? esc(i.source) : i.available === 0 ? "not available" : "?"}</td><td>${esc(i.cost ?? "")}</td><td>${esc(i.list_price ?? "")}</td></tr>`).join("");
   const suppliers = d.supplierRequests.map((r) => `<li>Supplier #${esc(r.supplier_id)} by ${esc(r.channel)}: ${esc(r.status)}${r.reply ? ` — "${esc(r.reply.slice(0, 200))}"` : ""}</li>`).join("");
@@ -188,6 +211,18 @@ async function showEnquiry(id) {
         <span class="badge ${esc(d.enquiry.status)}">${esc(d.enquiry.status.replace("_", " "))}</span>
         ${d.enquiry.notes ? `<span class="muted">${esc(d.enquiry.notes)}</span>` : ""}
         ${d.enquiry.status === "needs_human" ? `<button class="secondary" onclick="resume(${d.enquiry.id})">Let the agents continue</button>` : ""}</div>
+      <div class="grid" style="margin-top:8px">
+        <div><label>Name</label><input id="c-name" value="${esc(d.customer.name || "")}"></div>
+        <div><label>Company</label><input id="c-company" value="${esc(d.customer.company || "")}"></div>
+        <div><label>Emirate</label><input id="c-emirate" value="${esc(d.customer.emirate || "")}"></div>
+        <div><label>Area</label><input id="c-area" value="${esc(d.customer.area || "")}"></div>
+        <div><label>TRN (15 digits, or none)</label><input id="c-trn" value="${esc(d.customer.trn || "")}"></div>
+        <div><label>Level</label><select id="c-level">${levelOptions(d.customer.level)}</select></div>
+        <div><label>Prices from the list</label><select id="c-type">
+          <option value="customer" ${d.customer.type !== "reseller" ? "selected" : ""}>End customer (customer price)</option>
+          <option value="reseller" ${d.customer.type === "reseller" ? "selected" : ""}>Reseller (reseller price)</option></select></div>
+      </div>
+      <p><button class="secondary" onclick="saveCustomer(${Number(d.customer.id)}, ${Number(d.enquiry.id)})">Save customer</button> <span id="c-saved" class="muted"></span></p>
       <label>Chat</label>
       <div class="chat">${d.messages.map((m) => `<div class="bubble ${m.direction}">${esc(m.body)}<div class="muted">${new Date(m.created_at).toLocaleString()}</div></div>`).join("")}</div>
       <div class="row" style="margin-top:8px"><input id="manual-text" placeholder="Type a message to the customer" style="flex:1"><button class="primary" onclick="sendManual(${d.enquiry.id})">Send</button></div>
@@ -195,6 +230,40 @@ async function showEnquiry(id) {
       <div class="scroll"><table><tr><th>Qty</th><th>Item</th><th>Source</th><th>Cost</th><th>List price</th></tr>${items || `<tr><td colspan="5" class="muted">No items yet</td></tr>`}</table></div>
       ${suppliers ? `<label>Supplier requests</label><ul>${suppliers}</ul>` : ""}
     </div>`;
+}
+const ORDER_STATUSES = [["confirmed", "Confirmed"], ["ordered", "Ordered from supplier"], ["delivered", "Delivered"], ["paid", "Paid"]];
+async function loadOrders() {
+  const brand = $("order-brand").value;
+  const rows = await api(`/orders${brand ? `?brand=${encodeURIComponent(brand)}` : ""}`);
+  if (!brand) {
+    const brands = [...new Set(rows.map((o) => o.brand))].sort();
+    $("order-brand").innerHTML = `<option value="">All brands</option>` + brands.map((b) => `<option>${esc(b)}</option>`).join("");
+  }
+  const total = rows.reduce((sum, o) => sum + o.subtotal, 0);
+  $("order-table").innerHTML = `<tr><th>Order</th><th>Brand</th><th>Customer</th><th>Items</th><th>Before VAT</th><th>Status</th></tr>` +
+    (rows.length ? rows.map((o) => `<tr><td><strong>${esc(o.ref)}</strong><div class="muted">${esc(o.quote_ref || "")} · ${new Date(o.created_at).toLocaleDateString()}</div></td>
+      <td>${esc(o.brand)}</td><td>${esc(o.name || "")} ${esc(o.company || "")} <span class="muted">+${esc(o.phone)}</span></td>
+      <td>${JSON.parse(o.lines).map((l) => `${esc(l.quantity)} x ${esc(l.name)}`).join("<br>")}</td>
+      <td>${esc(o.subtotal.toFixed(2))}</td>
+      <td><select style="width:auto" onchange="setOrderStatus(${Number(o.id)}, this.value)">${ORDER_STATUSES.map(([v, t]) => `<option value="${v}" ${o.status === v ? "selected" : ""}>${t}</option>`).join("")}</select></td></tr>`).join("")
+      + `<tr><td colspan="4"><strong>Total</strong></td><td><strong>${esc(total.toFixed(2))}</strong></td><td></td></tr>`
+    : `<tr><td colspan="6" class="muted">No orders yet.</td></tr>`);
+}
+async function setOrderStatus(id, status) { await api(`/orders/${id}`, { method: "PUT", body: { status } }); }
+$("order-brand").addEventListener("change", loadOrders);
+
+let settingsCache = null;
+function levelOptions(level) {
+  const levels = settingsCache?.levels || [];
+  const own = level ?? null;
+  return `<option value="" ${own === null ? "selected" : ""}>New customer (${esc(levels[(settingsCache?.newCustomerLevel || 1) - 1]?.name || "")})</option>` +
+    levels.map((l, i) => `<option value="${i + 1}" ${own === i + 1 ? "selected" : ""}>${esc(l.name)}</option>`).join("");
+}
+async function saveCustomer(id, enquiryId) {
+  const body = { name: $("c-name").value, company: $("c-company").value, emirate: $("c-emirate").value, area: $("c-area").value, trn: $("c-trn").value, type: $("c-type").value };
+  if ($("c-level").value) body.level = Number($("c-level").value);
+  await api(`/customers/${id}`, { method: "PUT", body });
+  $("c-saved").textContent = "Saved. A quote waiting for approval keeps its prices; a new quote uses these.";
 }
 async function resume(id) { await api(`/enquiries/${id}/resume`, { method: "POST" }); showEnquiry(id); loadEnquiries(); }
 async function sendManual(id) {
@@ -206,23 +275,28 @@ async function sendManual(id) {
 
 async function loadSuppliers() {
   const rows = await api("/suppliers");
-  $("supplier-table").innerHTML = `<tr><th>#</th><th>Name</th><th>WhatsApp</th><th>Email</th><th>Categories</th><th>Active</th></tr>` +
-    rows.map((s) => `<tr><td>${s.id}</td><td>${esc(s.name)}</td><td>${esc(s.phone || "")}</td><td>${esc(s.email || "")}</td><td>${esc(s.categories || "all")}</td>
+  $("supplier-table").innerHTML = `<tr><th>#</th><th>Name</th><th>WhatsApp</th><th>Email</th><th>Brands</th><th>Categories</th><th>Active</th></tr>` +
+    rows.map((s) => `<tr><td>${s.id}</td><td>${esc(s.name)}</td><td>${esc(s.phone || "")}</td><td>${esc(s.email || "")}</td>
+      <td><input value="${esc(s.brands || "")}" placeholder="any brand" aria-label="Brands of ${esc(s.name)}" onchange="setSupplierBrands(${Number(s.id)}, this.value)"></td><td>${esc(s.categories || "all")}</td>
       <td><input type="checkbox" style="width:auto" ${s.active ? "checked" : ""} onchange="toggleSupplier(${Number(s.id)}, this.checked)"></td></tr>`).join("");
   supplierRows = rows;
 }
 let supplierRows = [];
+async function setSupplierBrands(id, brands) {
+  const s = supplierRows.find((row) => row.id === id);
+  if (s) { s.brands = brands; await api(`/suppliers/${id}`, { method: "PUT", body: s }); }
+}
 async function toggleSupplier(id, active) {
   const s = supplierRows.find((row) => row.id === id);
   if (s) await api(`/suppliers/${id}`, { method: "PUT", body: { ...s, active } });
 }
 $("add-supplier").addEventListener("click", async () => {
-  await api("/suppliers", { method: "POST", body: { name: $("s-name").value, phone: $("s-phone").value.replace(/\D/g, ""), email: $("s-email").value, categories: $("s-categories").value } });
-  ["s-name", "s-phone", "s-email", "s-categories"].forEach((id) => ($(id).value = ""));
+  await api("/suppliers", { method: "POST", body: { name: $("s-name").value, phone: $("s-phone").value.replace(/\D/g, ""), email: $("s-email").value, categories: $("s-categories").value, brands: $("s-brands").value } });
+  ["s-name", "s-phone", "s-email", "s-categories", "s-brands"].forEach((id) => ($(id).value = ""));
   loadSuppliers();
 });
 
-const plain = ["businessName", "currency", "tone", "businessInfo", "taxPercent", "quoteValidityDays", "supplierReminderHours", "supplierGiveUpHours"];
+const plain = ["businessName", "currency", "tone", "businessInfo", "taxPercent", "quoteValidityDays", "supplierReminderHours", "supplierGiveUpHours", "trn"];
 async function loadSettings() {
   const s = await api("/settings");
   plain.forEach((key) => ($(key).value = s[key]));
@@ -234,6 +308,15 @@ async function loadSettings() {
   $("byCategory").value = JSON.stringify(s.margin.byCategory);
   $("byCustomer").value = JSON.stringify(s.margin.byCustomer);
   $("personalContacts").value = (s.personalContacts || []).map((c) => `${c.phone}, ${c.name}`).join("\n");
+  $("byBrand").value = JSON.stringify(s.margin.byBrand || {});
+  $("levelByCategory").value = JSON.stringify(s.levelByCategory || {});
+  $("levels").value = s.levels.map((l) => `${l.name}, ${l.uplift}`).join("\n");
+  const options = (selected) => s.levels.map((l, i) => `<option value="${i + 1}" ${selected === i + 1 ? "selected" : ""}>${esc(l.name)}</option>`).join("");
+  $("newCustomerLevel").innerHTML = options(s.newCustomerLevel);
+  $("firstOrderLevel").innerHTML = options(s.firstOrderLevel);
+  $("firstOrderOffer").checked = s.firstOrderOffer;
+  $("requireDetails").checked = s.requireDetails;
+  settingsCache = s;
 }
 // Connections: the keys live in the server's .env file (never in this page); this shows what is set up and where to get each one.
 async function loadConnections() {
@@ -259,17 +342,30 @@ async function loadConnections() {
 }
 
 $("save-settings").addEventListener("click", async () => {
-  let byCategory, byCustomer;
-  try { byCategory = JSON.parse($("byCategory").value || "{}"); byCustomer = JSON.parse($("byCustomer").value || "{}"); }
-  catch { alert("The margin lists must be valid JSON, like {\"Pipes\": 12}"); return; }
-  const body = { requireApproval: $("requireApproval").checked };
+  let byCategory, byCustomer, byBrand, levelByCategory;
+  try {
+    byCategory = JSON.parse($("byCategory").value || "{}"); byCustomer = JSON.parse($("byCustomer").value || "{}");
+    byBrand = JSON.parse($("byBrand").value || "{}"); levelByCategory = JSON.parse($("levelByCategory").value || "{}");
+  } catch { alert("The margin and level lists must be valid JSON, like {\"Pipes\": 12}"); return; }
+  const levels = $("levels").value.split("\n").map((line) => {
+    const [name, uplift] = line.split(",");
+    return { name: (name || "").trim(), uplift: Number((uplift || "0").trim()) || 0 };
+  }).filter((l) => l.name);
+  if (levels.length === 0) { alert("Keep at least one customer level"); return; }
+  levels[0].uplift = 0;
+  const body = {
+    requireApproval: $("requireApproval").checked, requireDetails: $("requireDetails").checked, firstOrderOffer: $("firstOrderOffer").checked,
+    levels, levelByCategory,
+    newCustomerLevel: Math.min(Number($("newCustomerLevel").value) || 1, levels.length),
+    firstOrderLevel: Math.min(Number($("firstOrderLevel").value) || 1, levels.length),
+  };
   plain.forEach((key) => (body[key] = $(key).type === "number" ? Number($(key).value) : $(key).value));
   body.followupHours = $("followupHours").value.split(",").map((h) => Number(h.trim())).filter((h) => h > 0);
   body.personalContacts = $("personalContacts").value.split("\n").map((line) => {
     const [phone, ...name] = line.split(",");
     return { phone: (phone || "").replace(/\D/g, ""), name: name.join(",").trim() };
   }).filter((c) => c.phone);
-  body.margin = { defaultPercent: Number($("defaultPercent").value), priceBasis: $("priceBasis").value, roundTo: Number($("roundTo").value), byCategory, byCustomer };
+  body.margin = { defaultPercent: Number($("defaultPercent").value), priceBasis: $("priceBasis").value, roundTo: Number($("roundTo").value), byCategory, byCustomer, byBrand };
   await api("/settings", { method: "PUT", body });
   $("settings-saved").textContent = "Saved";
   setTimeout(() => ($("settings-saved").textContent = ""), 2000);
@@ -286,6 +382,7 @@ function refresh() {
   loadApprovals();
   if (!$("enquiries").hidden) loadEnquiries();
   if (!$("suppliers").hidden) loadSuppliers();
+  if (!$("orders").hidden) loadOrders();
   if (!$("settings").hidden) { loadSettings(); loadConnections(); }
 }
 refresh();

@@ -107,6 +107,23 @@ describe("dashboard", () => {
     expect(saved.margin).toMatchObject({ defaultPercent: 22, priceBasis: "list" });
   });
 
+  it("lets the owner set a customer's level and details, and checks the TRN", async () => {
+    const { t, base } = await start();
+    const headers = { Authorization: `Basic ${Buffer.from("owner:pw").toString("base64")}`, "Content-Type": "application/json" };
+    const customer = t.db.upsertCustomer("971501111111", "Ali");
+    const put = (body: unknown) => fetch(`${base}/api/customers/${customer.id}`, { method: "PUT", headers, body: JSON.stringify(body) });
+    expect((await put({ trn: "123" })).status).toBe(400);
+    expect((await put({ level: 9 })).status).toBe(400);
+    const saved = await (await put({ level: 1, type: "reseller", company: "Gulf Star", trn: "100345678900003" })).json();
+    expect(saved).toMatchObject({ level: 1, type: "reseller", company: "Gulf Star", trn: "100345678900003" });
+
+    t.db.createEnquiry(customer.id);
+    t.db.addOrder({ enquiry_id: 1, customer_id: customer.id, quote_ref: "Q-00001", brand: "UGREEN", subtotal: 10, lines: [] });
+    const orders = await (await fetch(`${base}/api/orders?brand=UGREEN`, { headers })).json();
+    expect(orders.map((o: { ref: string; company: string }) => [o.ref, o.company])).toEqual([["SO-0001", "Gulf Star"]]);
+    expect((await fetch(`${base}/api/orders/1`, { method: "PUT", headers, body: JSON.stringify({ status: "lost" }) })).status).toBe(400);
+  });
+
   it("shows what is connected without giving away any key", async () => {
     const { base } = await start();
     const headers = { Authorization: `Basic ${Buffer.from("owner:pw").toString("base64")}` };

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { CatalogItem } from "../src/catalog/catalog.js";
 import type { LlmRequest } from "../src/llm.js";
 import { setup } from "./helpers.js";
 
@@ -266,5 +267,135 @@ describe("enquiry to order", () => {
     const enquiry = t.db.openEnquiry(1)!;
     expect(enquiry.status).toBe("needs_human");
     expect(enquiry.notes).toContain("API down");
+  });
+});
+
+describe("brands, levels and new customers", () => {
+  const BRANDED: CatalogItem[] = [
+    { sku: "COS-P110", name: 'PVC Pipe 4" 6m', brand: "Cosmoplast", category: "Pipes", unit: "pcs", price: 12.5, cost: 9, stock: 200 },
+    { sku: "COS-P160", name: 'PVC Pipe 6" 6m', brand: "Cosmoplast", category: "Pipes", unit: "pcs", price: 24, cost: 18, stock: 40 },
+    { sku: "COS-E110", name: 'PVC Elbow 4"', brand: "Cosmoplast", category: "Fittings", unit: "pcs", price: 3.2, cost: 2.1, stock: 5 },
+    { sku: "PEG-BV025", name: 'Ball Valve Brass 1"', brand: "Pegler", category: "Valves", unit: "pcs", price: 28, cost: 19, stock: 0 },
+  ];
+  const VALVES = "971503333333";
+  const ANY = "971504444444";
+
+  function matchBranded(request: LlmRequest) {
+    const matches = [...request.prompt.matchAll(/Item (\d+): (.*)/g)].map(([, id, line]) => ({
+      item_id: Number(id),
+      sku: /pipe/i.test(line) ? "COS-P110" : /elbow/i.test(line) ? "COS-E110" : /valve/i.test(line) ? "PEG-BV025" : null,
+    }));
+    return { matches };
+  }
+
+  it("asks each brand's own suppliers, groups the quote by brand and makes one order per brand", async () => {
+    const t = setup({ catalog: BRANDED });
+    t.db.addSupplier({ name: "Gulf Pipes", phone: SUPPLIER, email: null, categories: "", brands: "Cosmoplast" });
+    t.db.addSupplier({ name: "Emirates Valves", phone: VALVES, email: null, categories: "", brands: "Pegler" });
+    t.db.addSupplier({ name: "Any Brand Trading", phone: ANY, email: null, categories: "" });
+    t.llm.handlers.coordinator = () => ({ intent: "new_enquiry" });
+    t.llm.handlers.gatherer = () => ({
+      items: [
+        { description: "PVC pipe 4 inch", quantity: 50, unit: "pcs" },
+        { description: "PVC elbow 4 inch", quantity: 20, unit: "pcs" },
+        { description: "Pegler ball valve 1 inch", quantity: 2, unit: "pcs" },
+      ],
+      missing_questions: [],
+    });
+    t.llm.handlers["price-checker"] = matchBranded;
+    await t.coordinator.onWhatsApp(fromCustomer("50 pipes, 20 elbows 4 inch and 2 Pegler ball valves 1 inch"));
+
+    const to = (phone: string) => t.whatsapp.sent.filter((m) => m.to === phone).map((m) => m.body).join("\n");
+    expect(to(SUPPLIER)).toContain("for Cosmoplast");
+    expect(to(SUPPLIER)).toContain("20 pcs PVC elbow 4 inch");
+    expect(to(SUPPLIER)).not.toContain("valve");
+    expect(to(VALVES)).toContain("2 pcs Pegler ball valve 1 inch");
+    expect(to(ANY)).toBe("");
+
+    const [elbow, valve] = [t.db.items(1)[1].id, t.db.items(1)[2].id];
+    t.llm.handlers.supplier = (request) => ({
+      answered: true,
+      quotes: request.prompt.includes("elbow")
+        ? [{ item_id: elbow, available: true, unit_cost: 2.3, note: "" }]
+        : [{ item_id: valve, available: true, unit_cost: 21.5, note: "" }],
+    });
+    await t.coordinator.onWhatsApp({ id: "wamid.s1", from: SUPPLIER, name: null, text: "elbow 2.30" });
+    await t.coordinator.onWhatsApp({ id: "wamid.s2", from: VALVES, name: null, text: "valve 21.50" });
+
+    const [draft] = t.db.pendingDrafts();
+    expect(draft.body).toMatch(/\*Cosmoplast\*\n1\. PVC Pipe 4" 6m[\s\S]*2\. PVC Elbow[\s\S]*\*Pegler\*\n3\. Ball Valve/);
+    await t.coordinator.approveDraft(draft.id);
+
+    t.llm.handlers.coordinator = () => ({ intent: "accept_quote" });
+    await t.coordinator.onWhatsApp(fromCustomer("Yes, go ahead"));
+    const orders = t.db.orders();
+    expect(orders.map((o) => [o.brand, o.subtotal]).sort()).toEqual([
+      ["Cosmoplast", 625 + 20 * 2.65],
+      ["Pegler", 2 * 24.73],
+    ]);
+    expect(t.whatsapp.sent.find((m) => m.to === OWNER && m.body.startsWith("Order confirmed"))!.body).toContain("By brand: ");
+  });
+
+  it("prices a new customer's first order at Level 1, then their own level", async () => {
+    const t = setup({ catalog: BRANDED });
+    t.db.saveSettings({ ...t.db.getSettings(), requireApproval: false });
+    t.llm.handlers.coordinator = () => ({ intent: "new_enquiry" });
+    t.llm.handlers.gatherer = () => ({ items: [{ description: "PVC pipe 4 inch", quantity: 10, unit: "pcs" }], missing_questions: [] });
+    t.llm.handlers["price-checker"] = matchBranded;
+
+    await t.coordinator.onWhatsApp(fromCustomer("10 pipes 4 inch"));
+    expect(t.whatsapp.sent.at(-1)!.body).toContain("10 pcs x AED 12.50");
+    t.llm.handlers.coordinator = () => ({ intent: "accept_quote" });
+    await t.coordinator.onWhatsApp(fromCustomer("ok confirm"));
+
+    // Second order: Level 3 (new customers' level) is 9% more.
+    t.llm.handlers.coordinator = () => ({ intent: "new_enquiry" });
+    await t.coordinator.onWhatsApp(fromCustomer("10 more pipes please"));
+    expect(t.whatsapp.sent.at(-1)!.body).toContain("10 pcs x AED 13.63");
+    expect(t.db.getCustomer(1)!.level).toBe(3);
+  });
+
+  it("gets a new customer's name, company, emirate and TRN before the quote goes out", async () => {
+    const t = setup({ catalog: BRANDED, requireDetails: true });
+    t.llm.handlers.coordinator = () => ({ intent: "new_enquiry" });
+    t.llm.handlers.gatherer = () => ({ items: [{ description: "PVC pipe 4 inch", quantity: 50, unit: "pcs" }], missing_questions: [] });
+    t.llm.handlers["price-checker"] = matchBranded;
+    const toCustomer = () => t.whatsapp.sent.filter((m) => m.to === CUSTOMER).map((m) => m.body);
+
+    await t.coordinator.onWhatsApp(fromCustomer("Hi, price for 50 pipes 4 inch"));
+    expect(t.db.getEnquiry(1)!.status).toBe("awaiting_details");
+    // The name comes from the WhatsApp profile; the rest is asked for.
+    expect(toCustomer().at(-1)).toContain("ask for their company name, emirate (location in the UAE) and TRN");
+    expect(t.db.pendingDrafts()).toHaveLength(0);
+
+    // Details with a TRN that is too short: asked again.
+    t.llm.handlers.coordinator = () => ({ intent: "other" });
+    t.llm.handlers.details = () => ({ name: "Ali", company: "Gulf Star Contracting", emirate: "sharjah", area: null, trn: "10034567890" });
+    await t.coordinator.onWhatsApp(fromCustomer("Ali, Gulf Star Contracting, Sharjah, TRN 10034567890"));
+    expect(t.db.getEnquiry(1)!.status).toBe("awaiting_details");
+    expect(toCustomer().at(-1)).toContain("it should be 15 digits");
+
+    t.llm.handlers.details = () => ({ name: null, company: null, emirate: null, area: null, trn: "100345678900003" });
+    await t.coordinator.onWhatsApp(fromCustomer("Sorry, TRN is 100345678900003"));
+    const customer = t.db.getCustomer(1)!;
+    expect(customer).toMatchObject({ name: "Ali", company: "Gulf Star Contracting", emirate: "Sharjah", trn: "100345678900003", level: 3 });
+    const [draft] = t.db.pendingDrafts();
+    expect(draft.body).toContain("To: Ali, Gulf Star Contracting, Sharjah");
+    expect(draft.body).toContain("Customer TRN: 100345678900003");
+    expect(draft.body).toContain("50 pcs x AED 12.50"); // first order at Level 1
+    expect(t.whatsapp.sent.some((m) => m.to === OWNER && m.body.startsWith("New customer: Ali, Gulf Star Contracting"))).toBe(true);
+  });
+
+  it("asks which model when the request fits several items in the stock list", async () => {
+    const t = setup({ catalog: BRANDED });
+    t.llm.handlers.coordinator = () => ({ intent: "new_enquiry" });
+    t.llm.handlers.gatherer = () => ({ items: [{ description: "PVC pipe", quantity: 10, unit: "pcs" }], missing_questions: [] });
+    t.llm.handlers.options = () => ({ questions: ["Which PVC pipe would you like? 1) 4 inch  2) 6 inch"] });
+    await t.coordinator.onWhatsApp(fromCustomer("price for 10 pvc pipes"));
+    expect(t.db.getEnquiry(1)!.status).toBe("gathering");
+    expect(t.whatsapp.sent.at(-1)!.body).toContain("Ask these questions");
+    expect(t.llm.calls.filter((c) => c.agent === "reception").at(-1)!.prompt).toContain("Which PVC pipe would you like? 1) 4 inch  2) 6 inch");
+    // The gatherer saw both pipes from the stock list.
+    expect(t.llm.calls.find((c) => c.agent === "options")!.prompt).toMatch(/PVC Pipe 4" 6m[\s\S]*PVC Pipe 6" 6m/);
   });
 });

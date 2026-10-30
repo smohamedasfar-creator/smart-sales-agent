@@ -11,16 +11,18 @@ Built with TypeScript, Node.js, SQLite and Claude.
 | Agent | Job | Uses Claude? |
 |---|---|---|
 | **Coordinator** (`src/agents/coordinator.ts`) | Gets every message, works out what the customer wants (new enquiry, more details, yes to the quote, question, wants a person) and passes the work to the right agent | Yes |
-| **WhatsApp Reception** (`reception.ts`) | Writes every reply to the customer in your tone and the customer's language | Yes |
-| **Requirement Gatherer** (`gatherer.ts`) | Turns the chat into an item list with quantities, and asks for missing sizes or quantities | Yes |
+| **WhatsApp Reception** (`reception.ts`) | Writes every reply to the customer in your tone and the customer's language, like a polite senior salesperson | Yes |
+| **Customer Details** (`details.ts`) | Gets a new customer's name, company, emirate and TRN from their messages | Yes |
+| **Requirement Gatherer** (`gatherer.ts`) | Turns the chat into an item list with quantities, asks for missing quantities, and asks which model when several in your stock list fit | Yes |
 | **Price & Stock** (`priceChecker.ts`) | Finds each item in the Excel or Zoho price list and checks stock | Yes, to pick the right match |
+| **Brand agents** (`coordinator.ts`) | One per brand: send that brand's missing items to that brand's suppliers, and keep that brand's orders | No |
 | **Supplier Enquiry** (`supplier.ts`) | Asks suppliers for items you don't have, on WhatsApp or email, and reads their prices from the reply | Yes, to read replies |
-| **Pricing & Margin** (`pricing.ts`) | Adds your margin (by customer, category or default), rounding and VAT | **No**: plain code, so prices are always exact |
-| **Estimate** (`estimate.ts`) | Writes the quotation and creates the estimate in Zoho when Zoho is connected | No |
+| **Pricing & Margin** (`pricing.ts`) | Margins (customer, item, category, brand, default), customer levels, the first-order price, rounding and VAT | **No**: plain code, so prices are always exact |
+| **Estimate** (`estimate.ts`) | Writes the quotation, grouped by brand and addressed to the customer with both TRNs, and creates the estimate in Zoho when Zoho is connected | No |
 | **Follow-up** (`followup.ts`) | Reminds customers who haven't answered a quote, and chases slow suppliers | Yes, to write the message |
 
 The database (`src/db.ts`) is the agents' shared memory: customers, chats, enquiries, items, supplier requests and
-drafts waiting for approval.
+drafts waiting for approval, and orders by brand.
 
 ### How an enquiry flows
 
@@ -73,37 +75,67 @@ the quotation appears in **Approvals**. Add a supplier under **Suppliers** to se
 
 ## Your price list
 
-**Excel**: the first row must have column names. These are recognised (any one of each):
+**Excel**: every sheet that has an item name column is read (or only the sheet named in `EXCEL_SHEET`). The column
+names may be in any of the first 10 rows. These are recognised; where a field lists several, the first one with a
+value on that row is used:
 
 | Field | Column names |
 |---|---|
-| Item name (required) | Item Name, Name, Description, Product, Material |
-| Code | Item Code, SKU, Code, Product Code, Part No |
-| Category | Category, Group, Item Group, Type, Brand |
+| Item name (required) | Name, Item Name, Description, Item, Product Name, Product, Material |
+| Code | SKU, Item Code, Code, Product Code, Part Number, Part No |
+| Brand | Brand, Make, Manufacturer. Without one, a sheet named after a brand (e.g. `OPTERNA`) gives its name |
+| Category | Category, Item Group, Group, Type, Product Category |
 | Unit | Unit, UOM |
-| Selling price | Selling Price, Price, Rate, Unit Price, Sale Price, MRP |
-| Cost | Cost Price, Cost, Purchase Price, Buying Price |
-| Stock | Stock, Qty, Quantity, Available, Stock on Hand, Balance |
+| Customer price | Customer Price, Selling Price, Price, Unit Price, MRP, Final Price, Rate |
+| Reseller price | Reseller Price, Dealer Price, Trade Price, Wholesale Price |
+| Cost | Cost, Cost Price, Purchase Price, Last Purchase |
+| Stock | Available Qty, Stock, Qty, Quantity, Stock on Hand, Balance |
+| Item margins | Margin Customer, Margin Re Seller (0.5 means 50%) |
+| Remark | Remark, Notes, MOQ |
 
-Without a stock column, every item counts as available. Replace `data/price-list.xlsx` at any time; the app reads it
-again when the file changes.
+Sheets without an item name column (like a NOTES sheet) are skipped. Without a stock column, every item counts as
+available. Replace `data/price-list.xlsx` at any time; the app reads it again when the file changes.
 
-**Zoho**: set `CATALOG_SOURCE=zoho` and the `ZOHO_*` settings. Items, prices, purchase rates and stock are read
+**Zoho**: set `CATALOG_SOURCE=zoho` and the `ZOHO_*` settings. Items, brands, prices, purchase rates and stock are read
 from Zoho Books or Zoho Inventory every 15 minutes. With the Zoho settings filled in, estimates are created in Zoho
 even when the price list is in Excel.
 
-## Margins and approval
+## Brands and suppliers
+
+Each brand in the price list has its own agent. When items are short or not in the list, each brand's items go only to
+the suppliers who sell that brand (**Suppliers → Brands**, e.g. `UGREEN, COMMANDO`). A supplier with no brands is the
+fallback for brands that have no supplier of their own. Quotations are grouped by brand, and when a customer says yes
+the quote becomes one order per brand, on the **Orders** tab, where each order's status is tracked (confirmed, ordered
+from supplier, delivered, paid) and orders can be shown for one brand.
+
+The customer is never told about suppliers: while prices are being collected, they hear that the quotation is being
+prepared.
+
+## Prices: margins and customer levels
 
 In the dashboard's **Settings**:
 
-- **Price basis**: use the price list's selling price when there is one, or always cost + margin.
-  Supplier items are always cost + margin.
-- **Margin %**: a default, plus optional margins per category and per customer number. The customer margin wins
-  over the category margin, which wins over the default.
+- **Price basis**: use the price list's price when there is one, or always cost + margin. Supplier items are always
+  cost + margin.
+- **Margin %**, first one set wins: the customer's own (by number), the item's own (from the price list), the
+  category's, the brand's, then the default.
+- **Customer levels**: Level 1 gets the best price; each other level pays a percentage more (default Level 2 +4%,
+  Level 3 +9%). A category can have its own percentage per level, e.g. `{"SWITCH": {"2": 3, "3": 8}}`. Set a
+  customer's level on their enquiry. New customers start at a level you choose (Level 3).
+- **First order**: a new customer's first order is priced at the first-order level (Level 1), without telling them;
+  after it, their own level applies.
+- **End customer or reseller** (on the customer): resellers get the price list's reseller price and reseller margin.
 - **Rounding**, **VAT %**, **quote validity**, **follow-up hours** (for example `24, 72`), and how long to wait
   for suppliers.
-- **Quotes wait for my approval**: on by default. Replies that ask questions or say "we are checking" are sent
-  automatically; quotations wait for you.
+- **Quotes wait for my approval**: on by default. A supplier price far from the price list (under 30% or over 3x),
+  a zero price or a very large quantity always waits for you, even with approval off.
+
+## New customers
+
+A number that is not yet known is asked, once and politely, for its **name, company, emirate and TRN** (or to say it
+is not VAT registered); a TRN that isn't 15 digits is asked for again. The quotation is prepared meanwhile but goes out
+only once these are known (Settings: "Send quotes only after…"). It is addressed to the customer, with their TRN and
+yours (Settings: Your TRN). You get an alert with the new customer's details and level.
 
 ## Personal contacts (family and friends)
 
