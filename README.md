@@ -105,6 +105,15 @@ In the dashboard's **Settings**:
 - **Quotes wait for my approval**: on by default. Replies that ask questions or say "we are checking" are sent
   automatically; quotations wait for you.
 
+## Personal contacts (family and friends)
+
+Your WhatsApp number also gets messages from family, friends and other people you know. List them under
+**Settings → Personal contacts** (one per line: number, name). The agents never read or answer their messages, and they
+are taken off the customer list. A number is matched with or without the country code.
+
+If someone who isn't on the list sends a message that looks personal (family news, an invitation, "how are you bro"),
+the agents stay quiet and send you an alert, so you can add them to the list.
+
 ## Going live on WhatsApp
 
 1. Create a Meta Business account and a developer app with the WhatsApp product (see Meta's

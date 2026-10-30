@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { InboundEmail } from "../channels/email.js";
 import type { InboundMessage } from "../channels/whatsapp.js";
-import type { Customer, Enquiry } from "../db.js";
+import { samePhone, type Customer, type Enquiry } from "../db.js";
 import { money, transcript, UNTRUSTED_NOTE, type AgentContext } from "./context.js";
 import { createQuote } from "./estimate.js";
 import { runCustomerFollowups, runSupplierChecks } from "./followup.js";
@@ -23,6 +23,7 @@ const Intent = z.object({
     "decline_quote",
     "question",
     "human_request",
+    "personal",
     "other",
   ]),
 });
@@ -35,6 +36,7 @@ Classify the customer's latest message (the last "Customer" lines of the convers
 - decline_quote: says no to the quote, or that they bought elsewhere.
 - question: asks about something else (delivery, payment, location, an item in the quote) without changing the products.
 - human_request: asks to talk to a person, or is angry or complaining.
+- personal: a personal or social message from family, friends or someone the owner knows (family news, invitations, jokes, "how are you bro"), not about buying anything.
 - other: greetings, thanks and anything else.
 ${UNTRUSTED_NOTE}`;
 
@@ -61,6 +63,12 @@ export class Coordinator {
       if (message.from === this.ctx.ownerPhone) {
         // The owner messages the business number to keep WhatsApp's 24-hour window open for alerts.
         this.ctx.log(`Message from the owner: ${message.text}`);
+        return;
+      }
+      const contact = this.ctx.db.getSettings().personalContacts.find((c) => samePhone(c.phone, message.from));
+      if (contact) {
+        // Family and friends: the agents don't read or answer, and they are not added as customers.
+        this.ctx.log(`Personal message from ${contact.name || message.from}; left for the owner.`);
         return;
       }
       const supplier = this.ctx.db.supplierByPhone(message.from);
@@ -105,6 +113,14 @@ export class Coordinator {
         effort: "low",
       });
       this.ctx.log(`Customer ${customer.phone}: ${intent}`);
+
+      if (intent === "personal") {
+        // Looks like family or a friend: stay quiet and let the owner decide.
+        await this.notifyOwner(
+          `${customer.name ?? customer.phone} sent a message that looks personal, so the agents didn't reply. If they are family or a friend, add +${customer.phone} to your personal contacts in Settings.`,
+        );
+        return;
+      }
 
       if (intent === "human_request") {
         enquiry ??= db.createEnquiry(customer.id);
@@ -181,8 +197,8 @@ export class Coordinator {
         await this.reply(
           customer,
           enquiry,
-          "Tell the customer we are confirming price and availability for some items and will send the quotation shortly.",
-          `Items being confirmed:\n${needSupplier.map((i) => `- ${i.description}`).join("\n")}`,
+          "Thank the customer and tell them we are preparing their quotation and will share it shortly. Do not mention suppliers, stock, availability or checking anything.",
+          `Items requested:\n${db.items(enquiry.id).map((i) => `- ${i.quantity} ${i.unit ?? ""} ${i.description}`).join("\n")}`,
         );
         return;
       }

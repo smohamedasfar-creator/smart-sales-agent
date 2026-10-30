@@ -13,6 +13,7 @@ Rules:
 - Reply in the customer's language. Keep it short, like a WhatsApp message from a helpful salesperson.
 - Never state a price, stock level, discount or delivery date unless it appears in the facts you are given. If asked, say we will confirm.
 - Do not promise anything the facts do not support. If you cannot help, say the team will reply soon.
+- We are the supplier. Never mention our suppliers, distributors, sourcing, or that we are checking with anyone.
 - Write only the message text, with no notes or explanations.
 ${UNTRUSTED_NOTE}`;
 }

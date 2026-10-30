@@ -105,6 +105,8 @@
       <label><input type="checkbox" id="requireApproval" style="width:auto"> Quotes wait for my approval before they are sent</label>
       <label>Margin % by category (JSON, e.g. {"Pipes": 12, "Fittings": 20})</label><input id="byCategory">
       <label>Margin % by customer number (JSON, e.g. {"971501234567": 8})</label><input id="byCustomer">
+      <label>Personal contacts: family, friends and others the agents must never answer (one per line: number, name)</label>
+      <textarea id="personalContacts" placeholder="971501234567, Ahmed (brother)"></textarea>
       <label>Tone of replies</label><input id="tone">
       <label>Business information the agents may share (address, hours, payment and delivery terms)</label>
       <textarea id="businessInfo"></textarea>
@@ -225,6 +227,7 @@ async function loadSettings() {
   $("roundTo").value = s.margin.roundTo;
   $("byCategory").value = JSON.stringify(s.margin.byCategory);
   $("byCustomer").value = JSON.stringify(s.margin.byCustomer);
+  $("personalContacts").value = (s.personalContacts || []).map((c) => `${c.phone}, ${c.name}`).join("\n");
 }
 $("save-settings").addEventListener("click", async () => {
   let byCategory, byCustomer;
@@ -233,6 +236,10 @@ $("save-settings").addEventListener("click", async () => {
   const body = { requireApproval: $("requireApproval").checked };
   plain.forEach((key) => (body[key] = $(key).type === "number" ? Number($(key).value) : $(key).value));
   body.followupHours = $("followupHours").value.split(",").map((h) => Number(h.trim())).filter((h) => h > 0);
+  body.personalContacts = $("personalContacts").value.split("\n").map((line) => {
+    const [phone, ...name] = line.split(",");
+    return { phone: (phone || "").replace(/\D/g, ""), name: name.join(",").trim() };
+  }).filter((c) => c.phone);
   body.margin = { defaultPercent: Number($("defaultPercent").value), priceBasis: $("priceBasis").value, roundTo: Number($("roundTo").value), byCategory, byCustomer };
   await api("/settings", { method: "PUT", body });
   $("settings-saved").textContent = "Saved";

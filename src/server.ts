@@ -119,7 +119,12 @@ export function createApp(coordinator: Coordinator, config: Pick<Config, "whatsa
     const current = db.getSettings();
     const next = { ...current, ...(req.body as Partial<Settings>) };
     next.margin = { ...current.margin, ...(req.body?.margin ?? {}) };
+    next.personalContacts = (next.personalContacts ?? [])
+      .map((c) => ({ phone: String(c.phone ?? "").replace(/\D/g, ""), name: String(c.name ?? "").trim() }))
+      .filter((c) => c.phone);
     db.saveSettings(next);
+    // People marked as personal are taken off the customer list, unless they already have an enquiry.
+    for (const contact of next.personalContacts) db.forgetCustomer(contact.phone);
     res.json(next);
   });
 

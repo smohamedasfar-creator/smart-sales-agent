@@ -81,6 +81,9 @@
   .bubble.out { background: var(--out); align-self: flex-end; }
   .bubble time { display: block; text-align: right; font-size: 10px; color: var(--muted); margin-top: 2px; font-variant-numeric: tabular-nums; }
   .typing { align-self: flex-end; font-size: 12px; color: var(--muted); padding: 2px 6px; }
+  .sender-pick { display: flex; align-items: center; gap: 6px; padding: 6px 10px; background: var(--card); border-bottom: 1px solid var(--line); font-size: 12px; color: var(--muted); }
+  .sender-pick select { flex: 1; min-width: 0; }
+  .notice { align-self: center; text-align: center; font-size: 12px; color: var(--warn); background: var(--warn-soft); border-radius: 8px; padding: 4px 10px; max-width: 90%; }
   .composer { display: flex; gap: 6px; padding: 8px; background: var(--card); border-top: 1px solid var(--line); }
   .composer textarea { flex: 1; min-width: 0; resize: none; height: 40px; border-radius: 20px; border: 1px solid var(--line); background: var(--bg); padding: 9px 14px; }
   .composer .btn { border-radius: 20px; }
@@ -161,8 +164,9 @@
         <div class="phone">
           <div class="phone-head">
             <div class="avatar" id="biz-initial">A</div>
-            <div><span id="biz-name"></span><small>WhatsApp Business · you are the customer</small></div>
+            <div><span id="biz-name"></span><small id="sender-label">WhatsApp Business · you are the customer</small></div>
           </div>
+          <label class="sender-pick">Message as <select id="sender" class="btn small"></select></label>
           <div class="chat" id="chat"></div>
           <form class="composer" id="composer">
             <textarea id="msg" placeholder="Type as the customer…" rows="1"></textarea>
@@ -290,6 +294,12 @@
           <div class="tablewrap"><table id="suppliers"></table></div>
         </div>
         <div class="card">
+          <h2>Personal contacts</h2>
+          <p class="muted">Family, friends and anyone else the AI must leave alone. Their messages are never read or answered, and they never appear as customers, enquiries or orders.</p>
+          <div class="tablewrap"><table id="personal"></table></div>
+          <button class="btn" type="button" id="add-personal" style="margin-top: 8px">Add personal contact</button>
+        </div>
+        <div class="card">
           <h2>Margins</h2>
           <p class="muted">Used when a price is worked out from cost: items from a supplier, or every item when "Price from" is "Cost + margin". The first one set wins: the item's own margin (from your list), then its category's, then its brand's (on the Brands tab), then the default.</p>
           <div class="tablewrap"><table id="category-margins"></table></div>
@@ -316,7 +326,7 @@ const START = (() => { const d = new Date(); d.setHours(9, 0, 0, 0); return d.ge
 
 function freshState() {
   return {
-    v: 2,
+    v: 3,
     now: START,
     nextId: 100, // above the example suppliers' ids
     useClaude: true,
@@ -349,6 +359,9 @@ function freshState() {
       { id: 3, name: "Al Madina Hardware", phone: "971502220003", brands: "", categories: "", last_inbound_at: null },
     ],
     orders: [],
+    // Family, friends and others the agents never answer; they never become customers.
+    personal: [{ phone: "971509990001", name: "Ahmed (brother)" }],
+    personalChats: {},
     customer: { id: 1, phone: "971501234567", name: "Rashid", type: "customer", last_inbound_at: null },
     catalogNotes: "",
     messages: [],
@@ -363,7 +376,7 @@ function freshState() {
 
 let S = load() || freshState();
 function load() {
-  try { const s = JSON.parse(localStorage.getItem("ssa-demo") || "null"); return s && s.v === 2 ? s : null; } catch { return null; }
+  try { const s = JSON.parse(localStorage.getItem("ssa-demo") || "null"); return s && s.v === 3 ? s : null; } catch { return null; }
 }
 function save() { try { localStorage.setItem("ssa-demo", JSON.stringify(S)); } catch {} }
 const id = () => S.nextId++;
@@ -559,6 +572,7 @@ Classify the customer's latest message (the last "Customer" lines of the convers
 - decline_quote: says no to the quote, or that they bought elsewhere.
 - question: asks about something else (delivery, payment, location, an item in the quote) without changing the products.
 - human_request: asks to talk to a person, or is angry or complaining.
+- personal: a personal or social message from family, friends or someone the owner knows (family news, invitations, jokes, "how are you bro"), not about buying anything.
 - other: greetings, thanks and anything else.
 ${UNTRUSTED_NOTE}
 
@@ -568,11 +582,12 @@ Open enquiry: ${enquiry ? `status ${enquiry.status}${enquiry.quote_ref ? `, quot
 
 Reply with only JSON: {"intent": "<one of the labels above>"}`;
   const r = await askClaude("Coordinator", "json", prompt, () => ({ intent: ruleIntent(text, enquiry) }));
-  const intents = ["new_enquiry", "add_details", "accept_quote", "decline_quote", "question", "human_request", "other"];
+  const intents = ["new_enquiry", "add_details", "accept_quote", "decline_quote", "question", "human_request", "personal", "other"];
   return intents.includes(r && r.intent) ? r.intent : ruleIntent(text, enquiry);
 }
 function ruleIntent(text, enquiry) {
   const t = text.toLowerCase();
+  if (/\b(bro|brother|sis|sister|mama|mom|mum|dad|baba|habibi|dinner|birthday|wedding|party|family|miss you|coming home|how are you doing)\b/.test(t) && !searchCatalog(t).length) return "personal";
   if (/\b(person|human|someone|manager|call me|agent|complain)/.test(t)) return "human_request";
   if (enquiry && enquiry.status === "quoted") {
     if (/^\s*(yes|yeah|ok|okay|confirm|go ahead|send it|done|agreed)\b/.test(t)) return "accept_quote";
@@ -911,10 +926,31 @@ async function reply(enquiry, task, facts, kind) {
   const text = await writeReply(enquiry, task, facts || "", kind);
   if (text) { db.addOut(enquiry ? enquiry.id : null, text); log("WhatsApp Reception", "Replied to the customer."); }
 }
-function notifyOwner(text) { log("Owner alert", text); }
+function notifyOwner(text, action) { S.log.push({ at: S.now, agent: "Owner alert", text, action }); }
+/** Same WhatsApp number, written with or without the country code. */
+const samePhone = (a, b) => { const x = String(a).replace(/\D/g, ""), y = String(b).replace(/\D/g, ""); return x.length >= 7 && y.length >= 7 ? x.slice(-9) === y.slice(-9) : x === y; };
+const personalContact = (phone) => S.personal.find((c) => samePhone(c.phone, phone));
+let sender = "customer"; // "customer" or a personal contact's phone
+/** Moves the demo customer to personal contacts and takes their chat off the customer side (unless they have an enquiry). */
+function markPersonal() {
+  if (personalContact(S.customer.phone)) return;
+  S.personal.push({ phone: S.customer.phone, name: S.customer.name });
+  if (!S.enquiries.length) { S.personalChats[S.customer.phone] = S.messages.map((m) => ({ direction: m.direction, body: m.body, at: m.at })); S.messages = []; }
+  log("Owner", `Added ${S.customer.name} to personal contacts. The agents won't answer them.`);
+  save(); renderSetup(); render();
+}
 
 function onCustomerMessage(text) {
   S.now += 2 * 60000;
+  const phone = sender === "customer" ? S.customer.phone : sender;
+  const contact = personalContact(phone);
+  if (contact) {
+    // Family and friends: the agents don't read or answer, and they are not added as customers.
+    (S.personalChats[contact.phone] = S.personalChats[contact.phone] || []).push({ direction: "in", body: text, at: iso() });
+    log("Coordinator", `Personal message from ${contact.name}. The agents didn't read it or reply, and it isn't added as a customer.`);
+    save(); render();
+    return;
+  }
   S.messages.push({ id: id(), direction: "in", body: text, at: iso(), enquiry_id: null });
   S.customer.last_inbound_at = iso();
   render();
@@ -931,6 +967,11 @@ async function handleCustomer() {
   try {
     const intent = await classify(enquiry);
     log("Coordinator", `Customer's message: ${intent.replace("_", " ")}.`);
+    if (intent === "personal") {
+      // Looks like family or a friend: stay quiet and let the owner decide.
+      notifyOwner(`${S.customer.name} sent a message that looks personal, so the agents didn't reply.`, "personal");
+      return;
+    }
     if (intent === "human_request") {
       enquiry = enquiry || db.createEnquiry();
       db.attach(enquiry.id);
@@ -1201,6 +1242,7 @@ const CUSTOMER_TRIES = [
   "Yes, confirm the order",
   "I need 20 PVC pipes",
   "Can I talk to someone?",
+  "Bro, are you coming for dinner tonight?",
 ];
 const SUPPLIER_TRIES = [
   "Elbow 4\" available, AED 2.30 each. Delivery tomorrow.",
@@ -1225,6 +1267,7 @@ function customerTries() {
     "Yes, confirm the order",
     inStock[0] ? `I need some ${inStock[0].category ? inStock[0].category.toLowerCase() : "items"} from ${inStock[0].brand}` : null,
     "Can I talk to someone?",
+    "Bro, are you coming for dinner tonight?",
   ].filter(Boolean);
 }
 /** Supplier answers for whatever the picked supplier was asked. */
@@ -1259,12 +1302,21 @@ function render() {
   const open = db.openRequests().length;
   $("#sup-count").hidden = !open; $("#sup-count").textContent = open;
 
-  // Customer chat
+  // Chat of whoever is messaging: the customer, or a personal contact the agents leave alone
+  if (sender !== "customer" && !personalContact(sender)) sender = "customer";
+  const custPersonal = personalContact(S.customer.phone);
+  put($("#sender"),
+    el("option", { value: "customer", selected: sender === "customer" }, `${S.customer.name} +${S.customer.phone}${custPersonal ? " (personal)" : " (customer)"}`),
+    ...S.personal.filter((c) => !samePhone(c.phone, S.customer.phone)).map((c) => el("option", { value: c.phone, selected: sender === c.phone }, `${c.name} +${c.phone} (personal)`)));
+  const personalPhone = sender !== "customer" ? sender : custPersonal ? custPersonal.phone : null;
+  $("#sender-label").textContent = personalPhone ? "WhatsApp Business · personal chat, AI is off" : "WhatsApp Business · you are the customer";
   const chat = $("#chat");
-  put(chat, 
-    S.messages.length ? null : el("div", { class: "muted", style: "text-align:center;padding:16px" }, "Send a message as the customer to start, or tap one of the examples below."),
-    ...S.messages.map((m) => el("div", { class: `bubble ${m.direction === "in" ? "out" : "in"}` }, m.body, el("time", {}, hhmm(m.at)))),
-    working ? el("div", { class: "typing" }, `${working} is working…`) : null,
+  const shownMsgs = personalPhone ? (S.personalChats[personalPhone] || []) : S.messages;
+  put(chat,
+    personalPhone ? el("div", { class: "notice" }, "Personal contact: the AI doesn't read or answer these messages. Only you reply.") : null,
+    shownMsgs.length ? null : el("div", { class: "muted", style: "text-align:center;padding:16px" }, personalPhone ? "Send a message as this person to see that nothing happens." : "Send a message as the customer to start, or tap one of the examples below."),
+    ...shownMsgs.map((m) => el("div", { class: `bubble ${m.direction === "in" ? "out" : "in"}` }, m.body, el("time", {}, hhmm(m.at)))),
+    working && !personalPhone ? el("div", { class: "typing" }, `${working} is working…`) : null,
   );
   chat.scrollTop = chat.scrollHeight;
   put($("#tries"), ...customerTries().map((t) => el("button", { type: "button", onclick: () => sendCustomer(t) }, t)));
@@ -1341,7 +1393,9 @@ function render() {
         el("button", { class: "btn danger", type: "button", onclick: () => rejectDraft(d.id) }, "Reject and handle myself")));
   }) : [el("p", { class: "empty" }, "Nothing waiting. Quotes appear here once the agents have priced every item.")]));
   const alerts = S.log.filter((l) => l.agent === "Owner alert");
-  put($("#alerts"), ...(alerts.length ? alerts.map((l) => el("div", {}, el("time", {}, stamp(l.at)), el("span", { class: "who owner" }, "Alert"), el("span", {}, l.text))) : [el("p", { class: "empty" }, "No alerts yet.")]));
+  put($("#alerts"), ...(alerts.length ? alerts.map((l) => el("div", {}, el("time", {}, stamp(l.at)), el("span", { class: "who owner" }, "Alert"),
+    el("span", {}, l.text, l.action === "personal" && !personalContact(S.customer.phone)
+      ? el("div", { style: "margin-top: 4px" }, el("button", { class: "btn small primary", type: "button", onclick: markPersonal }, `Add ${S.customer.name} to personal contacts`)) : null))) : [el("p", { class: "empty" }, "No alerts yet.")]));
 }
 
 // Excel price list (column names as in src/catalog/excel.ts)
@@ -1533,6 +1587,13 @@ function renderSetup() {
   put($("#source"), S.catalogSource
     ? el("span", { class: "tag stock" }, `Your Excel: ${S.catalogSource.file}${S.catalogSource.sheet ? ` · sheets ${S.catalogSource.sheet}` : ""} · ${S.catalog.length} items`)
     : el("span", { class: "tag" }, `Example list · ${S.catalog.length} items`));
+  put($("#personal"),
+    el("tr", {}, el("th", {}, "Name"), el("th", {}, "WhatsApp number"), el("th", {}, "")),
+    ...S.personal.map((c) => el("tr", {},
+      el("td", {}, el("input", { type: "text", value: c.name, "aria-label": "Name", onchange: (ev) => { c.name = ev.target.value.trim(); save(); render(); } })),
+      el("td", {}, el("input", { type: "tel", value: c.phone, "aria-label": "WhatsApp number", onchange: (ev) => { c.phone = ev.target.value.replace(/\D/g, ""); save(); render(); } })),
+      el("td", {}, el("button", { class: "btn small danger", type: "button", onclick: () => { S.personal = S.personal.filter((x) => x !== c); if (sender === c.phone) sender = "customer"; save(); renderSetup(); render(); } }, "Remove")))),
+    S.personal.length ? null : el("tr", {}, el("td", { class: "empty", colspan: 3 }, "No personal contacts yet.")));
   const m = S.settings.margin;
   const cats = [...new Map(S.catalog.filter((c) => c.category).map((c) => [c.category.toLowerCase(), c])).values()].sort((a, b) => (a.brand || "").localeCompare(b.brand || "") || a.category.localeCompare(b.category));
   put($("#category-margins"),
@@ -1610,6 +1671,8 @@ $("#sup-msg").addEventListener("keydown", (ev) => { if (ev.key === "Enter" && !e
 $("#sup-pick").addEventListener("change", (ev) => { supplierPick = Number(ev.target.value); render(); });
 $("#excel-file").addEventListener("change", (ev) => { const f = ev.target.files[0]; ev.target.value = ""; if (f) uploadExcel(f); });
 $("#use-example").addEventListener("click", () => { const f = freshState(); S.catalog = f.catalog; S.suppliers = f.suppliers; S.catalogSource = null; S.catalogNotes = ""; save(); renderSetup(); render(); });
+$("#sender").addEventListener("change", (ev) => { sender = ev.target.value; render(); });
+$("#add-personal").addEventListener("click", () => { S.personal.push({ phone: "", name: "New contact" }); save(); renderSetup(); });
 $("#order-brand").addEventListener("change", (ev) => { orderBrand = ev.target.value; render(); });
 $("#add-supplier").addEventListener("click", () => { S.suppliers.push({ id: id(), name: "New supplier", phone: "", brands: "", categories: "", last_inbound_at: null }); save(); renderSetup(); render(); });
 $("#supplier-file").addEventListener("change", (ev) => { const f = ev.target.files[0]; ev.target.value = ""; if (f) uploadSuppliers(f); });

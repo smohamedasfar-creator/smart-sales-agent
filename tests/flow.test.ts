@@ -38,13 +38,15 @@ describe("enquiry to order", () => {
 
     await t.coordinator.onWhatsApp(fromCustomer("Hi, need 50 pcs 4 inch PVC pipe and 20 elbows 4 inch, price?"));
 
-    // Only 5 elbows in stock, so the supplier is asked and the customer is told we are checking.
+    // Only 5 elbows in stock, so the supplier is asked; the customer only hears that the quote is being prepared.
     const enquiry = t.db.openEnquiry(1)!;
     expect(enquiry.status).toBe("waiting_supplier");
     const toSupplier = t.whatsapp.sent.find((m) => m.to === SUPPLIER)!;
     expect(toSupplier.body).toContain("20 pcs PVC elbow 4 inch");
     expect(toSupplier.body).not.toContain("pipe");
-    expect(t.whatsapp.sent.some((m) => m.to === CUSTOMER && m.body.includes("confirming price and availability"))).toBe(true);
+    const toCustomer = t.whatsapp.sent.filter((m) => m.to === CUSTOMER);
+    expect(toCustomer.some((m) => m.body.includes("preparing their quotation"))).toBe(true);
+    expect(toCustomer.some((m) => /confirming|availability/.test(m.body.split("Do not mention")[0]))).toBe(false);
 
     // The supplier answers; the quote is drafted and waits for the owner.
     const elbowId = t.db.items(enquiry.id).find((i) => i.description.includes("elbow"))!.id;
@@ -188,6 +190,29 @@ describe("enquiry to order", () => {
     await t.coordinator.onWhatsApp({ id: "wamid.o1", from: OWNER, name: "Owner", text: "hi" });
     expect(t.llm.calls).toHaveLength(0);
     expect(t.db.listEnquiries()).toHaveLength(0);
+  });
+
+  it("never answers a personal contact and keeps them off the customer list", async () => {
+    const t = setup();
+    t.db.saveSettings({ ...t.db.getSettings(), personalContacts: [{ phone: "0501111111", name: "Ali (cousin)" }] });
+    await t.coordinator.onWhatsApp(fromCustomer("Hi, are you coming for dinner tonight?"));
+    expect(t.llm.calls).toHaveLength(0);
+    expect(t.whatsapp.sent).toHaveLength(0);
+    expect(t.db.listEnquiries()).toHaveLength(0);
+    expect(t.logs.some((l) => l.includes("Personal message from Ali (cousin)"))).toBe(true);
+  });
+
+  it("stays quiet on a message that looks personal and tells the owner", async () => {
+    const t = setup();
+    t.llm.handlers.coordinator = () => ({ intent: "personal" });
+    await t.coordinator.onWhatsApp(fromCustomer("Bro, happy birthday! Party at mine on Friday"));
+    expect(t.whatsapp.sent.filter((m) => m.to === CUSTOMER)).toHaveLength(0);
+    expect(t.db.listEnquiries()).toHaveLength(0);
+    expect(t.whatsapp.sent.find((m) => m.to === OWNER)!.body).toContain("looks personal");
+
+    // Once the owner marks them as personal, they leave the customer list.
+    t.db.forgetCustomer(CUSTOMER);
+    expect(t.db.recentMessages(1)).toHaveLength(0);
   });
 
   it("ignores a message WhatsApp delivers twice", async () => {

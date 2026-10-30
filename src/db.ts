@@ -127,6 +127,21 @@ export interface Settings {
   followupHours: number[];
   supplierReminderHours: number;
   supplierGiveUpHours: number;
+  /** Family, friends and other people the agents never answer; they are not customers. */
+  personalContacts: PersonalContact[];
+}
+
+export interface PersonalContact {
+  phone: string;
+  name: string;
+}
+
+/** True when two WhatsApp numbers are the same, written with or without the country code. */
+export function samePhone(a: string, b: string): boolean {
+  const x = a.replace(/\D/g, "").replace(/^00/, "");
+  const y = b.replace(/\D/g, "").replace(/^00/, "");
+  if (x.length < 7 || y.length < 7) return x === y;
+  return x.slice(-9) === y.slice(-9);
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -147,6 +162,7 @@ export const DEFAULT_SETTINGS: Settings = {
   followupHours: [24, 72],
   supplierReminderHours: 4,
   supplierGiveUpHours: 24,
+  personalContacts: [],
 };
 
 const SCHEMA = `
@@ -294,6 +310,16 @@ export class Db {
     }
     const id = this.run("INSERT INTO customers (phone, name, created_at) VALUES (?, ?, ?)", phone, name, this.iso());
     return this.getCustomer(id)!;
+  }
+
+  /** Removes a person who is not a customer, with their messages, unless they already have an enquiry. */
+  forgetCustomer(phone: string): void {
+    for (const customer of this.all<Customer>("SELECT * FROM customers")) {
+      if (!samePhone(customer.phone, phone)) continue;
+      if (this.get("SELECT id FROM enquiries WHERE customer_id = ? LIMIT 1", customer.id)) continue;
+      this.run("DELETE FROM messages WHERE customer_id = ?", customer.id);
+      this.run("DELETE FROM customers WHERE id = ?", customer.id);
+    }
   }
 
   getCustomer(id: number): Customer | undefined {
