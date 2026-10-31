@@ -435,9 +435,8 @@ export class Coordinator {
       );
       return;
     }
-    await this.send(customer, enquiry.id, quote.body);
+    await this.sendQuote(customer, enquiry.id, quote.body);
     await this.quoteSent(enquiry.id);
-    db.addActivity(enquiry.id, customer.id, "Coordinator", `Sent quotation ${quote.ref} to the customer.`);
   }
 
   /** Prices items for this customer: their price list prices, margins and level (the first-order level on a first order). */
@@ -519,6 +518,33 @@ export class Coordinator {
     this.ctx.db.addOutbound(customer.id, enquiryId, body);
   }
 
+  /**
+   * Sends a quotation: the Zoho estimate PDF with a short message when Zoho made one, otherwise the text quotation.
+   * The text is kept in the chat history either way.
+   */
+  private async sendQuote(customer: Customer, enquiryId: number, body: string): Promise<void> {
+    const { db, zoho, whatsapp } = this.ctx;
+    const enquiry = db.getEnquiry(enquiryId);
+    if (zoho && enquiry?.zoho_estimate_id) {
+      try {
+        const pdf = await zoho.estimatePdf(enquiry.zoho_estimate_id);
+        const settings = db.getSettings();
+        const caption =
+          `*Quotation ${enquiry.quote_ref}*\nTotal: ${money(enquiry.quote_total ?? 0, settings)}${settings.taxPercent > 0 ? ` (incl. VAT)` : ""}\n` +
+          `Valid for ${settings.quoteValidityDays} days. Reply *YES* to confirm the order.`;
+        await whatsapp.sendDocument(customer.phone, pdf, `${enquiry.quote_ref}.pdf`, caption);
+        db.addOutbound(customer.id, enquiryId, `[Zoho estimate ${enquiry.quote_ref} sent as PDF]\n${body}`);
+        db.addActivity(enquiryId, customer.id, "Estimate", `Sent Zoho estimate ${enquiry.quote_ref} to the customer as a PDF.`);
+        return;
+      } catch (error) {
+        const reason = (error as Error).message.slice(0, 300);
+        db.addActivity(enquiryId, customer.id, "Estimate", `Couldn't send the Zoho PDF (${reason}); sent the quotation as text.`);
+      }
+    }
+    await this.send(customer, enquiryId, body);
+    db.addActivity(enquiryId, customer.id, "Coordinator", "Sent the quotation to the customer.");
+  }
+
   private async reply(customer: Customer, enquiry: Enquiry | null, task: string, facts = "", options: { asksDetails?: boolean; fallback?: string } = {}): Promise<void> {
     const { db } = this.ctx;
     customer = db.getCustomer(customer.id) ?? customer;
@@ -575,7 +601,9 @@ export class Coordinator {
     if (!draft || draft.status !== "pending") throw new Error("This draft is no longer waiting for approval");
     const body = editedBody?.trim() || draft.body;
     const customer = db.upsertCustomer(draft.to_phone, null);
-    await this.send(customer, draft.enquiry_id, body);
+    // An edited quote no longer matches the Zoho estimate, so it goes as the edited text.
+    if (draft.kind === "quote" && draft.enquiry_id && body === draft.body) await this.sendQuote(customer, draft.enquiry_id, body);
+    else await this.send(customer, draft.enquiry_id, body);
     db.setDraft(draft.id, "sent", body);
     if (draft.kind === "quote" && draft.enquiry_id) await this.quoteSent(draft.enquiry_id);
     db.addActivity(draft.enquiry_id, customer.id, "You", "Approved the quotation and sent it to the customer.");

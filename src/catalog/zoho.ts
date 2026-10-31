@@ -109,7 +109,7 @@ export class ZohoClient implements Catalog {
   }
 
   /** Finds the Zoho customer with this phone number, or creates one. */
-  async customerId(phone: string, name: string | null): Promise<string> {
+  async customerId(phone: string, name: string | null, company: string | null = null): Promise<string> {
     const digits = phone.replace(/\D/g, "");
     const found = await this.request<{ contacts: { contact_id: string }[] }>("GET", "/contacts", {
       phone_contains: digits.slice(-9),
@@ -117,7 +117,8 @@ export class ZohoClient implements Catalog {
     });
     if (found.contacts.length > 0) return found.contacts[0].contact_id;
     const created = await this.request<{ contact: { contact_id: string } }>("POST", "/contacts", {}, {
-      contact_name: name || `+${digits}`,
+      contact_name: company || name || `+${digits}`,
+      ...(company ? { company_name: company } : {}),
       contact_type: "customer",
       contact_persons: [{ first_name: name || `+${digits}`, mobile: `+${digits}`, is_primary_contact: true }],
     });

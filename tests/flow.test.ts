@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CatalogItem } from "../src/catalog/catalog.js";
+import type { ZohoClient } from "../src/catalog/zoho.js";
 import type { LlmRequest } from "../src/llm.js";
 import { setup } from "./helpers.js";
 
@@ -456,5 +457,53 @@ describe("keeping the conversation going when Claude has trouble", () => {
     expect(t.whatsapp.sent.filter((m) => m.to === CUSTOMER)).toHaveLength(1);
     // Nothing left to pick up the second time.
     expect(t.coordinator.resumeInterrupted()).toHaveLength(0);
+  });
+});
+
+describe("quotes from Zoho", () => {
+  function withZoho(fail?: string) {
+    const t = setup();
+    const calls: string[] = [];
+    t.ctx.zoho = {
+      customerId: async (phone: string, name: string | null, company: string | null) => {
+        calls.push(`customer ${phone} ${name} ${company}`);
+        return "c-1";
+      },
+      createEstimate: async () => {
+        if (fail) throw new Error(fail);
+        return { id: "est-1", number: "EST-00012", total: 131.25 };
+      },
+      markEstimate: async (_id: string, status: string) => {
+        calls.push(`mark ${status}`);
+      },
+      estimatePdf: async () => Buffer.from("%PDF"),
+    } as unknown as ZohoClient;
+    t.llm.handlers.coordinator = () => ({ intent: "new_enquiry" });
+    t.llm.handlers.gatherer = () => ({ items: [{ description: "PVC pipe 4 inch", quantity: 10, unit: "pcs" }], missing_questions: [] });
+    t.llm.handlers["price-checker"] = matchByKeyword;
+    return { t, calls };
+  }
+
+  it("sends the Zoho estimate as a PDF once the owner approves", async () => {
+    const { t, calls } = withZoho();
+    await t.coordinator.onWhatsApp(fromCustomer("10 pipes 4 inch"));
+    const [draft] = t.db.pendingDrafts();
+    expect(draft.body).toContain("*Quotation EST-00012*");
+    await t.coordinator.approveDraft(draft.id);
+    expect(t.whatsapp.documents).toEqual([
+      { to: CUSTOMER, filename: "EST-00012.pdf", caption: expect.stringContaining("Reply *YES* to confirm the order.") },
+    ]);
+    expect(calls).toContain("mark sent");
+    expect(t.db.activity(1).some((a) => a.text.includes("Sent Zoho estimate EST-00012"))).toBe(true);
+  });
+
+  it("tells the owner why Zoho refused, and quotes as text", async () => {
+    const { t } = withZoho("Zoho POST /estimates failed: Please select a place of supply.");
+    await t.coordinator.onWhatsApp(fromCustomer("10 pipes 4 inch"));
+    expect(t.db.alerts().some((a) => a.text.includes("Zoho said: Zoho POST /estimates failed: Please select a place of supply."))).toBe(true);
+    const [draft] = t.db.pendingDrafts();
+    await t.coordinator.approveDraft(draft.id);
+    expect(t.whatsapp.documents).toHaveLength(0);
+    expect(t.whatsapp.sent.at(-1)!.body).toContain("*Quotation Q-00001*");
   });
 });

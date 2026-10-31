@@ -26,7 +26,7 @@ export async function createQuote(
     try {
       const catalog = await ctx.catalog.items();
       const zohoIds = new Map(catalog.filter((c) => c.zohoItemId).map((c) => [c.sku, c.zohoItemId!]));
-      const customerId = await ctx.zoho.customerId(customer.phone, customer.name);
+      const customerId = await ctx.zoho.customerId(customer.phone, customer.name, customer.company);
       const estimate = await ctx.zoho.createEstimate(
         customerId,
         priced.lines.map((line) => ({
@@ -42,7 +42,11 @@ export async function createQuote(
       zohoEstimateId = estimate.id;
       ref = estimate.number;
     } catch (error) {
-      ctx.log(`Zoho estimate failed for enquiry ${enquiry.id}, quoting without it: ${(error as Error).message}`);
+      // Shown to the owner, so a Zoho setting that needs fixing doesn't go unnoticed.
+      const reason = (error as Error).message.slice(0, 400);
+      ctx.log(`Zoho estimate failed for enquiry ${enquiry.id}, quoting without it: ${reason}`);
+      ctx.db.addActivity(enquiry.id, customer.id, "Estimate", `Zoho didn't create the estimate, so the quote goes as a WhatsApp message. Zoho said: ${reason}`);
+      ctx.db.addAlert(`Zoho estimate not created for E${enquiry.id}. Zoho said: ${reason}`);
     }
   }
 
