@@ -223,6 +223,33 @@ export function createApp(coordinator: Coordinator, config: AppConfig) {
     }
   });
 
+  // The brands and categories in the price list, for the Settings tables.
+  app.get("/api/catalog-summary", async (_req, res) => {
+    let items: Awaited<ReturnType<typeof coordinator.ctx.catalog.items>> = [];
+    try {
+      items = await coordinator.ctx.catalog.items();
+    } catch {
+      // No price list yet: empty tables.
+    }
+    const brands = new Map<string, number>();
+    const categories = new Map<string, { name: string; brands: Set<string>; items: number }>();
+    for (const item of items) {
+      if (item.brand) brands.set(item.brand, (brands.get(item.brand) ?? 0) + 1);
+      if (!item.category) continue;
+      const key = item.category.toLowerCase();
+      const entry = categories.get(key) ?? { name: item.category, brands: new Set<string>(), items: 0 };
+      entry.items++;
+      if (item.brand) entry.brands.add(item.brand);
+      categories.set(key, entry);
+    }
+    res.json({
+      brands: [...brands].map(([name, count]) => ({ name, items: count })).sort((a, b) => a.name.localeCompare(b.name)),
+      categories: [...categories.values()]
+        .map((c) => ({ name: c.name, brands: [...c.brands].sort(), items: c.items }))
+        .sort((a, b) => (a.brands[0] ?? "").localeCompare(b.brands[0] ?? "") || a.name.localeCompare(b.name)),
+    });
+  });
+
   app.get("/api/alerts", (_req, res) => {
     res.json(db.alerts());
   });

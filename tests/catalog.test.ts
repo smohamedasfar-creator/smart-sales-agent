@@ -42,6 +42,10 @@ describe("Excel price list", () => {
     ]);
   });
 
+  it("says how to fix a missing price list", async () => {
+    await expect(new ExcelCatalog(join(tmpdir(), "no-such-price-list.xlsx")).items()).rejects.toThrow("upload it in the dashboard");
+  });
+
   it("reads every brand sheet, with brands from a column or the sheet name, and skips notes", async () => {
     const path = join(mkdtempSync(join(tmpdir(), "catalog-")), "stock.xlsx");
     const workbook = new ExcelJS.Workbook();

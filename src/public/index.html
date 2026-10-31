@@ -27,6 +27,8 @@
   .muted { color: var(--muted); font-size: 13px; }
   .badge { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 12px; border: 1px solid var(--line); }
   .badge.needs_human, .badge.awaiting_approval, .badge.awaiting_details { color: var(--warn); border-color: var(--warn); }
+  .save-bar { position: sticky; bottom: 8px; box-shadow: 0 2px 12px rgba(0,0,0,.12); }
+  td input { min-width: 70px; }
   .badge.won { color: var(--accent); border-color: var(--accent); }
   .badge.lost { color: var(--bad); border-color: var(--bad); }
   textarea, input, select { width: 100%; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
@@ -92,44 +94,80 @@
       <div class="row"><input type="file" id="price-file" accept=".xlsx" style="width:auto"><button class="primary" id="upload-price">Upload</button><span id="price-status" class="muted"></span></div>
     </div>
     <div class="card">
+      <strong>Your business</strong>
       <div class="grid">
         <div><label>Business name</label><input id="businessName"></div>
+        <div><label>Your TRN (printed on quotations)</label><input id="trn" placeholder="15 digits"></div>
+        <div><label>VAT %</label><input id="taxPercent" type="number" step="0.1"></div>
         <div><label>Currency</label><input id="currency"></div>
-        <div><label>Default margin %</label><input id="defaultPercent" type="number" step="0.1"></div>
-        <div>
-          <label>Price basis</label>
-          <select id="priceBasis">
-            <option value="list">Use the price list's selling price when there is one</option>
-            <option value="cost">Always cost + margin</option>
-          </select>
-        </div>
-        <div><label>Round unit prices up to (0 = no rounding)</label><input id="roundTo" type="number" step="0.01"></div>
-        <div><label>VAT / tax %</label><input id="taxPercent" type="number" step="0.1"></div>
-        <div><label>Quote valid for (days)</label><input id="quoteValidityDays" type="number"></div>
-        <div><label>Follow up after (hours, comma separated)</label><input id="followupHours"></div>
-        <div><label>Remind supplier after (hours)</label><input id="supplierReminderHours" type="number"></div>
-        <div><label>Stop waiting for supplier after (hours)</label><input id="supplierGiveUpHours" type="number"></div>
       </div>
-      <label><input type="checkbox" id="requireApproval" style="width:auto"> Quotes wait for my approval before they are sent</label>
-      <label>Margin % by category (JSON, e.g. {"Pipes": 12, "Fittings": 20})</label><input id="byCategory">
-      <label>Margin % by customer number (JSON, e.g. {"971501234567": 8})</label><input id="byCustomer">
-      <label>Personal contacts: family, friends and others the agents must never answer (one per line: number, name)</label>
-      <textarea id="personalContacts" placeholder="971501234567, Ahmed (brother)"></textarea>
-      <label>Margin % by brand (JSON, e.g. {"UGREEN": 25, "COMMANDO": 20})</label><input id="byBrand">
+      <label>What the agents may tell customers (address, opening hours, delivery and payment terms)</label>
+      <textarea id="businessInfo" placeholder="e.g. Office in Al Quoz, Dubai. Open Sat–Thu 9am–7pm. Delivery in Dubai next day; other emirates 2 days. Payment: bank transfer or cheque."></textarea>
+      <label>How the agents write</label><input id="tone">
+    </div>
+
+    <div class="card">
+      <strong>Quotes</strong>
+      <label><input type="checkbox" id="requireApproval" style="width:auto"> Quotes wait for my approval before they are sent (recommended)</label>
+      <label><input type="checkbox" id="requireDetails" style="width:auto"> Ask new customers for name, company, emirate and TRN before sending a quote</label>
       <div class="grid">
-        <div><label>Your TRN (printed on quotations)</label><input id="trn"></div>
-        <div><label>New customers start at level</label><select id="newCustomerLevel"></select></div>
-        <div><label>First order priced at level</label><select id="firstOrderLevel"></select></div>
+        <div><label>Prices come from</label>
+          <select id="priceBasis">
+            <option value="list">The price in my stock list (cost + margin when there is none)</option>
+            <option value="cost">Always cost + margin</option>
+          </select></div>
+        <div><label>Margin % when nothing else is set</label><input id="defaultPercent" type="number" step="0.1"></div>
+        <div><label>Quote valid for (days)</label><input id="quoteValidityDays" type="number"></div>
+        <div><label>Round prices up to (0 = no rounding)</label><input id="roundTo" type="number" step="0.01"></div>
       </div>
-      <label><input type="checkbox" id="firstOrderOffer" style="width:auto"> A new customer's first order gets the first-order level (they are not told)</label>
-      <label><input type="checkbox" id="requireDetails" style="width:auto"> Send quotes only after the customer's name, company, emirate and TRN are known</label>
-      <label>Customer levels: one per line, name and % above the best price (the first line is the best price)</label>
-      <textarea id="levels" placeholder="Level 1 (best price), 0&#10;Level 2, 4&#10;Level 3, 9"></textarea>
-      <label>Level % by category (JSON, e.g. {"SWITCH": {"2": 3, "3": 8}}; a category not listed uses the level's own %)</label><input id="levelByCategory">
-      <label>Tone of replies</label><input id="tone">
-      <label>Business information the agents may share (address, hours, payment and delivery terms)</label>
-      <textarea id="businessInfo"></textarea>
-      <p><button class="primary" id="save-settings">Save settings</button> <span id="settings-saved" class="muted"></span></p>
+    </div>
+
+    <div class="card">
+      <strong>Customer levels</strong>
+      <p class="muted">Level 1 always gets your best price. Each other level pays this much more.</p>
+      <div class="scroll"><table id="levels-table"></table></div>
+      <p><button class="secondary" id="add-level">Add a level</button></p>
+      <div class="grid">
+        <div><label>New customers start at</label><select id="newCustomerLevel"></select></div>
+        <div><label>A new customer's first order is priced at</label><select id="firstOrderLevel"></select></div>
+      </div>
+      <label><input type="checkbox" id="firstOrderOffer" style="width:auto"> Give new customers the first-order price (they are not told)</label>
+    </div>
+
+    <div class="card">
+      <strong>Brands</strong>
+      <p class="muted">Margin for each brand, used when an item has no margin of its own in the stock list. Empty = the general margin.</p>
+      <div class="scroll"><table id="brands-table"></table></div>
+    </div>
+
+    <div class="card">
+      <strong>Categories</strong>
+      <p class="muted">Optional. A margin for a category, and its own level percentages. Empty boxes use the brand's margin and the level's own percentage.</p>
+      <div class="scroll"><table id="categories-table"></table></div>
+    </div>
+
+    <div class="card">
+      <strong>Personal contacts</strong>
+      <p class="muted">Family, friends and anyone the agents must never answer. They are not customers.</p>
+      <div class="scroll"><table id="personal-table"></table></div>
+      <p><button class="secondary" id="add-personal">Add a person</button></p>
+    </div>
+
+    <div class="card">
+      <strong>Follow-ups and suppliers</strong>
+      <div class="grid">
+        <div><label>Remind customers after (hours, e.g. 24, 72)</label><input id="followupHours"></div>
+        <div><label>Remind a slow supplier after (hours)</label><input id="supplierReminderHours" type="number"></div>
+        <div><label>Stop waiting for a supplier after (hours)</label><input id="supplierGiveUpHours" type="number"></div>
+      </div>
+      <details><summary class="muted">Special margin for one customer</summary>
+        <div class="scroll"><table id="customers-table"></table></div>
+        <p><button class="secondary" id="add-customer-margin">Add a customer</button></p>
+      </details>
+    </div>
+
+    <div class="card save-bar">
+      <button class="primary" id="save-settings">Save settings</button> <span id="settings-saved" class="muted"></span>
     </div>
   </section>
 
@@ -305,27 +343,107 @@ $("add-supplier").addEventListener("click", async () => {
 });
 
 const plain = ["businessName", "currency", "tone", "businessInfo", "taxPercent", "quoteValidityDays", "supplierReminderHours", "supplierGiveUpHours", "trn"];
+// The settings being edited, and the brands and categories found in the stock list.
+let edit = null;
+let summary = { brands: [], categories: [] };
+const num = (v) => (v === "" || v == null ? null : Number(v));
+const findKey = (map, name) => Object.keys(map).find((k) => k.toLowerCase() === String(name).toLowerCase());
+
 async function loadSettings() {
-  const s = await api("/settings");
-  plain.forEach((key) => ($(key).value = s[key]));
+  const [s, sum] = await Promise.all([api("/settings"), api("/catalog-summary").catch(() => ({ brands: [], categories: [] }))]);
+  edit = s;
+  summary = sum;
+  plain.forEach((key) => ($(key).value = s[key] ?? ""));
   $("requireApproval").checked = s.requireApproval;
+  $("requireDetails").checked = s.requireDetails;
+  $("firstOrderOffer").checked = s.firstOrderOffer;
   $("followupHours").value = s.followupHours.join(", ");
   $("defaultPercent").value = s.margin.defaultPercent;
   $("priceBasis").value = s.margin.priceBasis;
   $("roundTo").value = s.margin.roundTo;
-  $("byCategory").value = JSON.stringify(s.margin.byCategory);
-  $("byCustomer").value = JSON.stringify(s.margin.byCustomer);
-  $("personalContacts").value = (s.personalContacts || []).map((c) => `${c.phone}, ${c.name}`).join("\n");
-  $("byBrand").value = JSON.stringify(s.margin.byBrand || {});
-  $("levelByCategory").value = JSON.stringify(s.levelByCategory || {});
-  $("levels").value = s.levels.map((l) => `${l.name}, ${l.uplift}`).join("\n");
-  const options = (selected) => s.levels.map((l, i) => `<option value="${i + 1}" ${selected === i + 1 ? "selected" : ""}>${esc(l.name)}</option>`).join("");
-  $("newCustomerLevel").innerHTML = options(s.newCustomerLevel);
-  $("firstOrderLevel").innerHTML = options(s.firstOrderLevel);
-  $("firstOrderOffer").checked = s.firstOrderOffer;
-  $("requireDetails").checked = s.requireDetails;
   settingsCache = s;
+  drawSettingsTables();
 }
+
+function drawSettingsTables() {
+  const s = edit;
+  const levelSelect = (selected) => s.levels.map((l, i) => `<option value="${i + 1}" ${selected === i + 1 ? "selected" : ""}>${esc(l.name)}</option>`).join("");
+  $("newCustomerLevel").innerHTML = levelSelect(s.newCustomerLevel);
+  $("firstOrderLevel").innerHTML = levelSelect(s.firstOrderLevel);
+  $("levels-table").innerHTML = `<tr><th>Level</th><th>Name</th><th>% more than Level 1</th><th></th></tr>` +
+    s.levels.map((l, i) => `<tr><td>${i + 1}</td>
+      <td><input value="${esc(l.name)}" aria-label="Name of level ${i + 1}" oninput="edit.levels[${i}].name = this.value"></td>
+      <td>${i === 0 ? "0 (best price)" : `<input type="number" step="0.1" value="${esc(l.uplift)}" aria-label="Percent for level ${i + 1}" oninput="edit.levels[${i}].uplift = Number(this.value) || 0">`}</td>
+      <td>${i > 0 && i === s.levels.length - 1 ? `<button class="secondary danger" onclick="edit.levels.pop(); drawSettingsTables()">Remove</button>` : ""}</td></tr>`).join("");
+
+  const brandRows = summary.brands.length ? summary.brands : Object.keys(s.margin.byBrand).map((name) => ({ name, items: "" }));
+  $("brands-table").innerHTML = brandRows.length
+    ? `<tr><th>Brand</th><th>Items</th><th>Margin %</th></tr>` + brandRows.map((b) => {
+        const key = findKey(s.margin.byBrand, b.name);
+        return `<tr><td>${esc(b.name)}</td><td>${esc(b.items)}</td>
+          <td><input type="number" step="0.1" placeholder="${esc(s.margin.defaultPercent)}" value="${key ? esc(s.margin.byBrand[key]) : ""}" aria-label="Margin for ${esc(b.name)}"
+            oninput="setMap(edit.margin.byBrand, ${esc(JSON.stringify(b.name))}, this.value)"></td></tr>`;
+      }).join("")
+    : `<tr><td class="muted">Upload your stock list first; its brands appear here.</td></tr>`;
+
+  const levelHeads = s.levels.slice(1).map((l) => `<th>${esc(l.name)} %</th>`).join("");
+  $("categories-table").innerHTML = summary.categories.length
+    ? `<tr><th>Category</th><th>Brands</th><th>Items</th><th>Margin %</th>${levelHeads}</tr>` + summary.categories.map((c) => {
+        const mKey = findKey(s.margin.byCategory, c.name);
+        const lKey = findKey(s.levelByCategory, c.name);
+        const levels = s.levels.slice(1).map((l, i) => {
+          const v = lKey ? s.levelByCategory[lKey][String(i + 2)] : undefined;
+          return `<td><input type="number" step="0.1" placeholder="${esc(l.uplift)}" value="${v ?? ""}" aria-label="${esc(l.name)} percent for ${esc(c.name)}"
+            oninput="setLevel(${esc(JSON.stringify(c.name))}, ${i + 2}, this.value)" style="width:90px"></td>`;
+        }).join("");
+        return `<tr><td>${esc(c.name)}</td><td class="muted">${esc(c.brands.join(", "))}</td><td>${esc(c.items)}</td>
+          <td><input type="number" step="0.1" placeholder="–" value="${mKey ? esc(s.margin.byCategory[mKey]) : ""}" aria-label="Margin for ${esc(c.name)}"
+            oninput="setMap(edit.margin.byCategory, ${esc(JSON.stringify(c.name))}, this.value)" style="width:90px"></td>${levels}</tr>`;
+      }).join("")
+    : `<tr><td class="muted">Upload your stock list first; its categories appear here.</td></tr>`;
+
+  $("personal-table").innerHTML = `<tr><th>Name</th><th>WhatsApp number (with country code)</th><th></th></tr>` +
+    (s.personalContacts.length ? s.personalContacts.map((c, i) => `<tr>
+      <td><input value="${esc(c.name)}" placeholder="e.g. Ahmed (brother)" aria-label="Name" oninput="edit.personalContacts[${i}].name = this.value"></td>
+      <td><input value="${esc(c.phone)}" placeholder="971501234567" aria-label="Number" oninput="edit.personalContacts[${i}].phone = this.value"></td>
+      <td><button class="secondary danger" onclick="edit.personalContacts.splice(${i}, 1); drawSettingsTables()">Remove</button></td></tr>`).join("")
+    : `<tr><td colspan="3" class="muted">Nobody yet.</td></tr>`);
+
+  const customers = Object.entries(s.margin.byCustomer);
+  $("customers-table").innerHTML = `<tr><th>Customer number</th><th>Margin %</th><th></th></tr>` +
+    (customers.length ? customers.map(([phone, percent], i) => `<tr>
+      <td><input value="${esc(phone)}" aria-label="Customer number" onchange="renameCustomer(${i}, this.value)"></td>
+      <td><input type="number" step="0.1" value="${esc(percent)}" aria-label="Margin" oninput="edit.margin.byCustomer[Object.keys(edit.margin.byCustomer)[${i}]] = Number(this.value) || 0"></td>
+      <td><button class="secondary danger" onclick="delete edit.margin.byCustomer[Object.keys(edit.margin.byCustomer)[${i}]]; drawSettingsTables()">Remove</button></td></tr>`).join("")
+    : `<tr><td colspan="3" class="muted">None.</td></tr>`);
+}
+
+function setMap(map, name, value) {
+  const key = findKey(map, name) ?? name;
+  if (value === "") delete map[key];
+  else map[key] = Number(value);
+}
+function setLevel(category, level, value) {
+  const key = findKey(edit.levelByCategory, category) ?? category;
+  const row = (edit.levelByCategory[key] = edit.levelByCategory[key] || {});
+  if (value === "") delete row[String(level)];
+  else row[String(level)] = Number(value);
+  if (Object.keys(row).length === 0) delete edit.levelByCategory[key];
+}
+function renameCustomer(index, phone) {
+  const entries = Object.entries(edit.margin.byCustomer);
+  entries[index][0] = phone.replace(/\D/g, "");
+  edit.margin.byCustomer = Object.fromEntries(entries.filter(([p]) => p));
+  drawSettingsTables();
+}
+$("add-level").addEventListener("click", () => {
+  const last = edit.levels[edit.levels.length - 1];
+  edit.levels.push({ name: `Level ${edit.levels.length + 1}`, uplift: (last.uplift || 0) + 5 });
+  drawSettingsTables();
+});
+$("add-personal").addEventListener("click", () => { edit.personalContacts.push({ name: "", phone: "" }); drawSettingsTables(); });
+$("add-customer-margin").addEventListener("click", () => { edit.margin.byCustomer["971"] = edit.margin.defaultPercent; drawSettingsTables(); });
+
 // Connections: the keys live in the server's .env file (never in this page); this shows what is set up and where to get each one.
 async function loadConnections() {
   const c = await api("/connections");
@@ -350,33 +468,26 @@ async function loadConnections() {
 }
 
 $("save-settings").addEventListener("click", async () => {
-  let byCategory, byCustomer, byBrand, levelByCategory;
-  try {
-    byCategory = JSON.parse($("byCategory").value || "{}"); byCustomer = JSON.parse($("byCustomer").value || "{}");
-    byBrand = JSON.parse($("byBrand").value || "{}"); levelByCategory = JSON.parse($("levelByCategory").value || "{}");
-  } catch { alert("The margin and level lists must be valid JSON, like {\"Pipes\": 12}"); return; }
-  const levels = $("levels").value.split("\n").map((line) => {
-    const [name, uplift] = line.split(",");
-    return { name: (name || "").trim(), uplift: Number((uplift || "0").trim()) || 0 };
-  }).filter((l) => l.name);
+  const levels = edit.levels.map((l) => ({ name: String(l.name).trim(), uplift: Number(l.uplift) || 0 })).filter((l) => l.name);
   if (levels.length === 0) { alert("Keep at least one customer level"); return; }
   levels[0].uplift = 0;
   const body = {
     requireApproval: $("requireApproval").checked, requireDetails: $("requireDetails").checked, firstOrderOffer: $("firstOrderOffer").checked,
-    levels, levelByCategory,
+    levels, levelByCategory: edit.levelByCategory,
     newCustomerLevel: Math.min(Number($("newCustomerLevel").value) || 1, levels.length),
     firstOrderLevel: Math.min(Number($("firstOrderLevel").value) || 1, levels.length),
+    personalContacts: edit.personalContacts.map((c) => ({ name: String(c.name).trim(), phone: String(c.phone).replace(/\D/g, "") })).filter((c) => c.phone),
   };
   plain.forEach((key) => (body[key] = $(key).type === "number" ? Number($(key).value) : $(key).value));
   body.followupHours = $("followupHours").value.split(",").map((h) => Number(h.trim())).filter((h) => h > 0);
-  body.personalContacts = $("personalContacts").value.split("\n").map((line) => {
-    const [phone, ...name] = line.split(",");
-    return { phone: (phone || "").replace(/\D/g, ""), name: name.join(",").trim() };
-  }).filter((c) => c.phone);
-  body.margin = { defaultPercent: Number($("defaultPercent").value), priceBasis: $("priceBasis").value, roundTo: Number($("roundTo").value), byCategory, byCustomer, byBrand };
+  body.margin = {
+    defaultPercent: Number($("defaultPercent").value), priceBasis: $("priceBasis").value, roundTo: Number($("roundTo").value),
+    byCategory: edit.margin.byCategory, byCustomer: edit.margin.byCustomer, byBrand: edit.margin.byBrand,
+  };
   await api("/settings", { method: "PUT", body });
   $("settings-saved").textContent = "Saved";
   setTimeout(() => ($("settings-saved").textContent = ""), 2000);
+  loadSettings();
 });
 
 $("upload-price").addEventListener("click", async () => {
@@ -386,8 +497,9 @@ $("upload-price").addEventListener("click", async () => {
   const response = await fetch("/api/price-list", { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: file });
   const data = await response.json().catch(() => ({}));
   $("price-status").textContent = response.ok
-    ? `Loaded ${data.items} items${data.brands.length ? ` · brands: ${data.brands.join(", ")}` : ""}.`
+    ? `Loaded ${data.items} items${data.brands.length ? ` · brands: ${data.brands.join(", ")}` : ""}. Set brand and category margins below.`
     : (data.error || `Upload failed (${response.status})`);
+  if (response.ok) loadSettings();
 });
 
 $("t-send").addEventListener("click", async () => {

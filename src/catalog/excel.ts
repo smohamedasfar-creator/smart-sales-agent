@@ -1,4 +1,4 @@
-import { statSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import ExcelJS from "exceljs";
 import type { Catalog, CatalogItem } from "./catalog.js";
 
@@ -125,6 +125,7 @@ export class ExcelCatalog implements Catalog {
   ) {}
 
   async items(): Promise<CatalogItem[]> {
+    if (!existsSync(this.path)) throw new Error("No price list yet: upload it in the dashboard (Settings → Price list)");
     const mtime = statSync(this.path).mtimeMs;
     if (mtime !== this.loadedMtime) {
       this.cache = await readExcelCatalog(this.path, this.sheet);

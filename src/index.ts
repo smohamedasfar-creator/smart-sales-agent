@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { Coordinator } from "./agents/coordinator.js";
 import type { AgentContext } from "./agents/context.js";
 import type { Catalog } from "./catalog/catalog.js";
@@ -36,6 +37,7 @@ if (config.catalogSource === "zoho") {
   catalog = zoho;
 } else {
   catalog = new ExcelCatalog(config.excel.path, config.excel.sheet);
+  if (!existsSync(config.excel.path)) log(`No price list at ${config.excel.path} yet: upload it in the dashboard (Settings → Price list).`);
 }
 
 const whatsappReady = Boolean(config.whatsapp.accessToken && config.whatsapp.phoneNumberId);
