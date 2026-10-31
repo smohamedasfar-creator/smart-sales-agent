@@ -89,6 +89,16 @@
   <section id="settings" hidden>
     <div class="card" id="connections"></div>
     <div class="card">
+      <strong>Backup</strong>
+      <p class="muted">Keep a copy of your settings (margins, levels, brands, categories, personal contacts), suppliers and customers' details on your computer. Download one after changing settings; restore it after a reset or on a new server.</p>
+      <div class="row">
+        <a class="primary" href="/api/backup" download style="text-decoration:none;padding:8px 14px;border-radius:8px;background:var(--accent);color:var(--accent-text)">Download backup</a>
+        <input type="file" id="backup-file" accept=".json,application/json" style="width:auto">
+        <button class="secondary" id="restore-backup">Restore backup</button>
+        <span id="backup-status" class="muted"></span>
+      </div>
+    </div>
+    <div class="card">
       <strong>Price list</strong>
       <p class="muted">Upload your Excel stock list. Every brand sheet is read; the agents use it straight away.</p>
       <div class="row"><input type="file" id="price-file" accept=".xlsx" style="width:auto"><button class="primary" id="upload-price">Upload</button><span id="price-status" class="muted"></span></div>
@@ -488,6 +498,19 @@ $("save-settings").addEventListener("click", async () => {
   $("settings-saved").textContent = "Saved";
   setTimeout(() => ($("settings-saved").textContent = ""), 2000);
   loadSettings();
+});
+
+$("restore-backup").addEventListener("click", async () => {
+  const file = $("backup-file").files[0];
+  if (!file) { $("backup-status").textContent = "Choose your backup file first."; return; }
+  let backup;
+  try { backup = JSON.parse(await file.text()); } catch { $("backup-status").textContent = "That file isn't a backup (not readable)."; return; }
+  const response = await fetch("/api/restore", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(backup) });
+  const data = await response.json().catch(() => ({}));
+  $("backup-status").textContent = response.ok
+    ? `Restored settings, ${data.suppliers} suppliers and ${data.customers} customers.`
+    : (data.error || `Restore failed (${response.status})`);
+  if (response.ok) loadSettings();
 });
 
 $("upload-price").addEventListener("click", async () => {

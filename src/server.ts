@@ -6,6 +6,7 @@ import express, { type NextFunction, type Request, type Response } from "express
 import type { Coordinator } from "./agents/coordinator.js";
 import { parseOwnerReplies, parseWebhook, verifySignature } from "./channels/whatsapp.js";
 import type { Config } from "./config.js";
+import { createBackup, restoreBackup } from "./backup.js";
 import { readExcelCatalog } from "./catalog/excel.js";
 import type { CustomerDetails, Settings } from "./db.js";
 
@@ -136,6 +137,17 @@ export function createApp(coordinator: Coordinator, config: AppConfig) {
 
   app.get("/api/connections", (_req, res) => {
     res.json(connectionStatus(config));
+  });
+
+  // Backup: settings, suppliers and customers as one file to keep; restore it after a reset or on a new server.
+  app.get("/api/backup", (_req, res) => {
+    const day = db.now().toISOString().slice(0, 10);
+    res.set("Content-Disposition", `attachment; filename="smart-sales-agent-backup-${day}.json"`);
+    res.type("application/json").send(JSON.stringify(createBackup(db), null, 2));
+  });
+
+  app.post("/api/restore", express.json({ limit: "10mb" }), (req, res) => {
+    res.json(restoreBackup(db, req.body));
   });
 
   app.get("/api/settings", (_req, res) => {

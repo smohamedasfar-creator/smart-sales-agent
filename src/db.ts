@@ -402,6 +402,10 @@ export class Db {
 
   // Customers and messages
 
+  customers(): Customer[] {
+    return this.all<Customer>("SELECT * FROM customers ORDER BY id");
+  }
+
   upsertCustomer(phone: string, name: string | null): Customer {
     const existing = this.get<Customer>("SELECT * FROM customers WHERE phone = ?", phone);
     if (existing) {

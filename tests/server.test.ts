@@ -156,6 +156,37 @@ describe("dashboard", () => {
     expect(existsSync(path)).toBe(true);
   });
 
+  it("downloads a backup and restores it on a fresh app", async () => {
+    const auth = { Authorization: `Basic ${Buffer.from("owner:pw").toString("base64")}` };
+    const first = await start();
+    const s = first.t.db.getSettings();
+    first.t.db.saveSettings({ ...s, trn: "100111222300003", margin: { ...s.margin, byCategory: { "CAT6 CABLE": 20 }, byBrand: { OPTERNA: 25 } }, levelByCategory: { SWITCH: { "2": 3 } } });
+    first.t.db.addSupplier({ name: "UGREEN Distributor", phone: "971500000111", email: null, categories: "", brands: "UGREEN" });
+    const customer = first.t.db.upsertCustomer("971501111111", "Ali");
+    first.t.db.updateCustomer(customer.id, { company: "Gulf Star", emirate: "Sharjah", trn: "100345678900003", level: 1, type: "reseller" });
+
+    const download = await fetch(`${first.base}/api/backup`, { headers: auth });
+    expect(download.headers.get("content-disposition")).toContain("smart-sales-agent-backup-");
+    const backup = await download.json();
+
+    const second = await start();
+    const restore = (body: unknown) =>
+      fetch(`${second.base}/api/restore`, { method: "POST", headers: { ...auth, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    expect((await restore({ hello: "world" })).status).toBe(400);
+    expect(await (await restore(backup)).json()).toEqual({ suppliers: 1, customers: 1 });
+    // Restoring twice doesn't make duplicates.
+    await restore(backup);
+
+    const restored = second.t.db.getSettings();
+    expect(restored.trn).toBe("100111222300003");
+    expect(restored.margin.byCategory).toEqual({ "CAT6 CABLE": 20 });
+    expect(restored.margin.byBrand).toEqual({ OPTERNA: 25 });
+    expect(restored.levelByCategory).toEqual({ SWITCH: { "2": 3 } });
+    expect(second.t.db.suppliers(false).map((x) => [x.name, x.brands])).toEqual([["UGREEN Distributor", "UGREEN"]]);
+    expect(second.t.db.customers()).toHaveLength(1);
+    expect(second.t.db.customers()[0]).toMatchObject({ company: "Gulf Star", emirate: "Sharjah", level: 1, type: "reseller" });
+  });
+
   it("shows what is connected without giving away any key", async () => {
     const { base } = await start();
     const headers = { Authorization: `Basic ${Buffer.from("owner:pw").toString("base64")}` };
