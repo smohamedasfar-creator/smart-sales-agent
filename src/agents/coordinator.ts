@@ -42,6 +42,8 @@ Classify the customer's latest message (the last "Customer" lines of the convers
 - other: greetings, thanks and anything else. Messages that only give the customer's name, company, location or TRN are "other".
 ${UNTRUSTED_NOTE}`;
 
+const HOLDING_REPLY = "Thank you for your message. Our team will get back to you shortly.";
+
 export class Coordinator {
   private readonly queues = new Map<string, Promise<void>>();
 
@@ -239,7 +241,15 @@ export class Coordinator {
       enquiry ??= db.createEnquiry(customer.id);
       db.attachMessages(customer.id, enquiry.id);
       db.setStatus(enquiry.id, "needs_human", `Agent error: ${(error as Error).message}`);
-      await this.notifyOwner(`The agents could not handle a message from ${customer.name ?? customer.phone} (E${enquiry.id}). Please reply yourself.`);
+      // Never leave the customer without an answer.
+      try {
+        await this.send(customer, enquiry.id, HOLDING_REPLY);
+      } catch (sendError) {
+        this.ctx.log(`Could not send the holding reply: ${(sendError as Error).message}`);
+      }
+      await this.notifyOwner(
+        `The agents could not handle a message from ${customer.name ?? customer.phone} (E${enquiry.id}); the customer was told you'll reply shortly. Reason: ${(error as Error).message.slice(0, 300)}`,
+      );
     }
   }
 
@@ -258,6 +268,7 @@ export class Coordinator {
         enquiry,
         "Ask these questions so we can prepare the quotation. Briefly confirm what you understood so far.",
         `Items so far:\n${result.items.map((i) => `- ${i.quantity || "?"} ${i.unit ?? ""} ${i.description}`).join("\n")}\n\nQuestions:\n${result.missing_questions.map((q) => `- ${q}`).join("\n")}`,
+        { fallback: `Thank you${customer.name ? `, ${customer.name}` : ""}. To prepare your quotation, could you please confirm:\n${result.missing_questions.map((q) => `- ${q}`).join("\n")}` },
       );
       return;
     }
@@ -424,14 +435,22 @@ export class Coordinator {
     this.ctx.db.addOutbound(customer.id, enquiryId, body);
   }
 
-  private async reply(customer: Customer, enquiry: Enquiry | null, task: string, facts = "", options: { asksDetails?: boolean } = {}): Promise<void> {
+  private async reply(customer: Customer, enquiry: Enquiry | null, task: string, facts = "", options: { asksDetails?: boolean; fallback?: string } = {}): Promise<void> {
     const { db } = this.ctx;
     customer = db.getCustomer(customer.id) ?? customer;
     const missing = db.getSettings().requireDetails ? missingDetails(customer) : [];
     const askNow = missing.length > 0 && !customer.details_asked && !options.asksDetails && !/team will contact|happy to help with any future/.test(task);
     if (askNow) task += ` This is a new customer: at the end, also politely ask for their ${listText(missing)}, so we can prepare the quotation and arrange delivery.`;
     if (askNow || options.asksDetails) db.updateCustomer(customer.id, { details_asked: 1 });
-    const text = await writeReply(this.ctx, customer, enquiry, task, facts);
+    let text: string;
+    try {
+      text = await writeReply(this.ctx, customer, enquiry, task, facts);
+    } catch (error) {
+      // Without a fallback the caller's error handling takes over; with one, the conversation goes on.
+      if (!options.fallback) throw error;
+      this.ctx.log(`Reception failed, sending the plain version: ${(error as Error).message}`);
+      text = options.fallback;
+    }
     if (text) await this.send(customer, enquiry?.id ?? null, text);
   }
 
@@ -445,6 +464,22 @@ export class Coordinator {
     } catch (error) {
       this.ctx.log(`Could not notify the owner on WhatsApp: ${(error as Error).message}`);
     }
+  }
+
+  /**
+   * After a restart, enquiries that were still being worked on (their customer's last message has no answer)
+   * are picked up again, so no customer is left waiting.
+   */
+  resumeInterrupted(): Promise<void>[] {
+    const { db } = this.ctx;
+    const stuck = [...db.enquiriesByStatus("gathering"), ...db.enquiriesByStatus("checking")];
+    return stuck.flatMap((enquiry) => {
+      const customer = db.getCustomer(enquiry.customer_id);
+      const last = customer ? db.recentMessages(customer.id, 1)[0] : undefined;
+      if (!customer || last?.direction !== "in") return [];
+      this.ctx.log(`Picking up E${enquiry.id} again after a restart.`);
+      return [this.serial(customer.phone, () => this.handleCustomer(db.getCustomer(customer.id)!))];
+    });
   }
 
   // Owner actions from the dashboard

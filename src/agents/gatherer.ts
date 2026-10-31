@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { closeMatches } from "../catalog/catalog.js";
+import { closeMatches, type CatalogItem } from "../catalog/catalog.js";
 import type { Customer, Enquiry } from "../db.js";
 import { transcript, UNTRUSTED_NOTE, type AgentContext } from "./context.js";
 
@@ -55,14 +55,29 @@ async function whichOne(ctx: AgentContext, customer: Customer, messages: Paramet
           .join("\n"),
     )
     .join("\n\n");
-  const result = await ctx.llm.json({
-    agent: "options",
-    system: OPTIONS_SYSTEM,
-    prompt: `${transcript(messages, customer)}\n\n<requests>\n${listing}\n</requests>\n\nWrite the questions, if any.`,
-    schema: Options,
-    effort: "medium",
-  });
-  return result.questions.filter((q) => q.trim() !== "");
+  try {
+    const result = await ctx.llm.json({
+      agent: "options",
+      system: OPTIONS_SYSTEM,
+      prompt: `${transcript(messages, customer)}\n\n<requests>\n${listing}\n</requests>\n\nWrite the questions, if any.`,
+      schema: Options,
+      effort: "medium",
+    });
+    return result.questions.filter((q) => q.trim() !== "");
+  } catch (error) {
+    // The conversation must go on: ask from the stock list without AI.
+    ctx.log(`Options step failed, asking from the stock list instead: ${(error as Error).message}`);
+    return open.map((x) => choiceQuestion(x.item.description, x.options));
+  }
+}
+
+/** "Which CAT6 cable would you like? 1) UTP PVC … Grey 2) UTP LSZH … Green", in-stock items first. */
+export function choiceQuestion(description: string, options: CatalogItem[]): string {
+  const list = [...options].sort((a, b) => Number((b.stock ?? 1) > 0) - Number((a.stock ?? 1) > 0)).slice(0, 6);
+  const words = list.map((o) => o.name.toUpperCase().split(/\s+/));
+  const shared = words[0].filter((w) => words.every((x) => x.includes(w)));
+  const labels = list.map((o, i) => words[i].filter((w) => !shared.includes(w)).join(" ").replace(/[\s,;(]+$/, "") || o.name);
+  return `Which ${description} would you like? ${labels.map((l, i) => `${i + 1}) ${l}${list[i].stock === 0 ? " (on order)" : ""}`).join("  ")}`;
 }
 
 export async function gatherRequirements(ctx: AgentContext, enquiry: Enquiry, customer: Customer): Promise<GatherResult> {

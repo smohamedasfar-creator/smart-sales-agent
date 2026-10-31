@@ -25,14 +25,18 @@ export interface Llm {
 export class LlmRefusalError extends Error {}
 
 export class ClaudeLlm implements Llm {
-  private readonly client = new Anthropic();
+  // A slow or rate-limited call fails within two minutes instead of hanging the chat; the SDK waits out
+  // "please slow down" (429) answers before retrying, which new accounts with low limits get often.
+  private readonly client = new Anthropic({ timeout: 120_000, maxRetries: 5 });
 
   constructor(private readonly model: string) {}
 
   private base(request: LlmRequest) {
     return {
       model: this.model,
-      max_tokens: 16000,
+      // The answers are short (a label, an item list, a WhatsApp reply). A smaller ceiling keeps each call
+      // inside a new account's output-tokens-per-minute limit, which counts max_tokens up front.
+      max_tokens: 8000,
       // If the model declines a request, the API retries it on a fallback model.
       betas: ["server-side-fallback-2026-07-01"],
       fallbacks: "default" as const,
