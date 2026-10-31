@@ -118,7 +118,8 @@
 
     <div class="card">
       <strong>Quotes</strong>
-      <label><input type="checkbox" id="requireApproval" style="width:auto"> Quotes wait for my approval before they are sent (recommended)</label>
+      <label><input type="checkbox" id="requireApproval" style="width:auto"> Quotes wait for my approval before they are sent (recommended). With OWNER_PHONE set, reply OK or NO on WhatsApp.</label>
+      <label><input type="checkbox" id="autoSendStockQuotes" style="width:auto"> When every item is in stock and in Zoho, send the Zoho estimate straight away</label>
       <label><input type="checkbox" id="requireDetails" style="width:auto"> Ask new customers for name, company, emirate and TRN before sending a quote</label>
       <div class="grid">
         <div><label>Prices come from</label>
@@ -395,6 +396,7 @@ async function loadSettings() {
   summary = sum;
   plain.forEach((key) => ($(key).value = s[key] ?? ""));
   $("requireApproval").checked = s.requireApproval;
+  $("autoSendStockQuotes").checked = s.autoSendStockQuotes;
   $("requireDetails").checked = s.requireDetails;
   $("firstOrderOffer").checked = s.firstOrderOffer;
   $("followupHours").value = s.followupHours.join(", ");
@@ -499,7 +501,13 @@ async function loadConnections() {
         <td>In ${link("https://developers.facebook.com/apps", "Meta for Developers → your app → WhatsApp → API setup")}: set <code>WHATSAPP_ACCESS_TOKEN</code> (a permanent System User token from ${link("https://business.facebook.com/settings/system-users", "Business settings → System users")}) and <code>WHATSAPP_PHONE_NUMBER_ID</code>.
         App settings → Basic gives <code>WHATSAPP_APP_SECRET</code>; choose any <code>WHATSAPP_VERIFY_TOKEN</code>.<br>
         Webhook (WhatsApp → Configuration): <code>${esc(c.whatsapp.webhookUrl)}</code> ${c.whatsapp.webhookReady ? "" : `<span class="badge needs_human">app secret or verify token missing</span>`}, subscribe to <em>messages</em> and <em>smb_message_echoes</em> (so the agents step back when you reply from the WhatsApp Business app).<br>
-        Templates (${link("https://business.facebook.com/wa/manage/message-templates/", "WhatsApp Manager → Message templates")}): follow-up ${c.whatsapp.followupTemplate ? `<code>${esc(c.whatsapp.followupTemplate)}</code>` : "not set"}, supplier ${c.whatsapp.supplierTemplate ? `<code>${esc(c.whatsapp.supplierTemplate)}</code>` : "not set"}.</td></tr>
+        Templates (${link("https://business.facebook.com/wa/manage/message-templates/", "WhatsApp Manager → Message templates")}): follow-up ${c.whatsapp.followupTemplate ? `<code>${esc(c.whatsapp.followupTemplate)}</code>` : "not set"}, supplier ${c.whatsapp.supplierTemplate ? `<code>${esc(c.whatsapp.supplierTemplate)}</code>` : "not set"}.
+        <div class="row" style="margin-top:8px">
+          <input id="waba-id" placeholder="Messaging account ID (from Meta's API setup)" value="${esc(c.whatsapp.businessAccountId || "")}" style="max-width:320px">
+          <button class="primary" onclick="checkWhatsApp()">Check WhatsApp</button>
+          <button class="secondary" onclick="linkWhatsApp()">Link my WhatsApp account</button>
+        </div>
+        <div id="wa-check" style="margin-top:6px"></div></td></tr>
       <tr><td><strong>Zoho</strong> (${esc(c.zoho.app === "inventory" ? "Inventory" : "Books")})</td><td>${dot(c.zoho.connected)}</td>
         <td>At ${link(`https://api-console.${c.zoho.domain}`, "Zoho API Console")} create a Self Client and a refresh token (scope <code>ZohoBooks.fullaccess.all</code> or <code>ZohoInventory.fullaccess.all</code>). Set <code>ZOHO_CLIENT_ID</code>, <code>ZOHO_CLIENT_SECRET</code>, <code>ZOHO_REFRESH_TOKEN</code>, <code>ZOHO_ORGANIZATION_ID</code> and <code>ZOHO_DOMAIN</code> (zoho.com, zoho.in, zoho.eu…). Price list in use: ${esc(c.priceList)}.</td></tr>
       <tr><td><strong>Email</strong> (suppliers)</td><td>${dot(c.email.connected)}</td>
@@ -507,12 +515,33 @@ async function loadConnections() {
     </table>`;
 }
 
+function showWhatsAppCheck(r) {
+  const ok = (text) => `<div style="color:var(--accent)">✓ ${esc(text)}</div>`;
+  const bad = (text) => `<div style="color:var(--bad)">✗ ${esc(text)}</div>`;
+  $("wa-check").innerHTML = [
+    r.tokenError ? bad(`Access token: ${r.tokenError}. Generate a new token in Meta (Step 1. Try it out), copy it with the copy button and replace WHATSAPP_ACCESS_TOKEN in Render.`)
+      : ok(`Access token works${r.phone ? ` for ${r.phone}` : ""}.`),
+    r.linkError ? bad(`WhatsApp account: ${r.linkError}. Check the Messaging account ID.`)
+      : r.linked === true ? ok("WhatsApp account is linked: customers' messages come to this app.")
+      : r.linked === false ? bad("WhatsApp account is not linked yet, so customers' messages don't arrive. Click \"Link my WhatsApp account\".")
+      : (r.tokenError ? "" : `<div class="muted">Enter the Messaging account ID to check the link.</div>`),
+  ].join("");
+}
+async function checkWhatsApp() {
+  $("wa-check").textContent = "Asking Meta…";
+  showWhatsAppCheck(await api("/whatsapp/check", { method: "POST", body: { businessAccountId: $("waba-id").value } }));
+}
+async function linkWhatsApp() {
+  $("wa-check").textContent = "Linking…";
+  showWhatsAppCheck(await api("/whatsapp/link", { method: "POST", body: { businessAccountId: $("waba-id").value } }));
+}
+
 $("save-settings").addEventListener("click", async () => {
   const levels = edit.levels.map((l) => ({ name: String(l.name).trim(), uplift: Number(l.uplift) || 0 })).filter((l) => l.name);
   if (levels.length === 0) { alert("Keep at least one customer level"); return; }
   levels[0].uplift = 0;
   const body = {
-    requireApproval: $("requireApproval").checked, requireDetails: $("requireDetails").checked, firstOrderOffer: $("firstOrderOffer").checked,
+    requireApproval: $("requireApproval").checked, autoSendStockQuotes: $("autoSendStockQuotes").checked, requireDetails: $("requireDetails").checked, firstOrderOffer: $("firstOrderOffer").checked,
     levels, levelByCategory: edit.levelByCategory,
     newCustomerLevel: Math.min(Number($("newCustomerLevel").value) || 1, levels.length),
     firstOrderLevel: Math.min(Number($("firstOrderLevel").value) || 1, levels.length),

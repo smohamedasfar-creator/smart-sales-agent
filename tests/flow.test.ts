@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { CatalogItem } from "../src/catalog/catalog.js";
+import type { ZohoClient } from "../src/catalog/zoho.js";
 import type { LlmRequest } from "../src/llm.js";
-import { setup } from "./helpers.js";
+import { CATALOG, setup } from "./helpers.js";
 
 const CUSTOMER = "971501111111";
 const SUPPLIER = "971502222222";
@@ -456,5 +457,78 @@ describe("keeping the conversation going when Claude has trouble", () => {
     expect(t.whatsapp.sent.filter((m) => m.to === CUSTOMER)).toHaveLength(1);
     // Nothing left to pick up the second time.
     expect(t.coordinator.resumeInterrupted()).toHaveLength(0);
+  });
+});
+
+describe("quotes from Zoho", () => {
+  function withZoho(fail?: string) {
+    const t = setup();
+    const calls: string[] = [];
+    t.ctx.zoho = {
+      items: async () => [{ ...CATALOG[0], zohoItemId: "z-pipe" }],
+      customerId: async (phone: string, name: string | null, company: string | null) => {
+        calls.push(`customer ${phone} ${name} ${company}`);
+        return "c-1";
+      },
+      createEstimate: async () => {
+        if (fail) throw new Error(fail);
+        return { id: "est-1", number: "EST-00012", total: 131.25 };
+      },
+      markEstimate: async (_id: string, status: string) => {
+        calls.push(`mark ${status}`);
+      },
+      estimatePdf: async () => Buffer.from("%PDF"),
+    } as unknown as ZohoClient;
+    t.llm.handlers.coordinator = () => ({ intent: "new_enquiry" });
+    t.llm.handlers["price-checker"] = matchByKeyword;
+    return { t, calls };
+  }
+  const pipes = () => ({ items: [{ description: "PVC pipe 4 inch", quantity: 10, unit: "pcs" }], missing_questions: [] });
+
+  it("sends the Zoho estimate PDF straight away when every item is in stock and in Zoho", async () => {
+    const { t, calls } = withZoho();
+    t.llm.handlers.gatherer = pipes;
+    await t.coordinator.onWhatsApp(fromCustomer("10 pipes 4 inch"));
+    expect(t.db.pendingDrafts()).toHaveLength(0);
+    expect(t.whatsapp.documents).toEqual([
+      { to: CUSTOMER, filename: "EST-00012.pdf", caption: expect.stringContaining("Reply *YES* to confirm the order.") },
+    ]);
+    expect(calls).toContain("mark sent");
+    expect(t.db.getEnquiry(1)!.status).toBe("quoted");
+    expect(t.whatsapp.sent.find((m) => m.to === OWNER)!.body).toContain("Sent Zoho estimate EST-00012");
+  });
+
+  it("waits for the owner when not every item is in stock, and the owner approves with OK on WhatsApp", async () => {
+    const { t } = withZoho();
+    t.llm.handlers.gatherer = pipesAndElbows; // only 5 elbows in stock, and no supplier
+    await t.coordinator.onWhatsApp(fromCustomer("50 pipes and 20 elbows, 4 inch"));
+    const [draft] = t.db.pendingDrafts();
+    expect(draft.body).toContain("*Quotation EST-00012*");
+    expect(t.whatsapp.sent.some((m) => m.to === OWNER && m.body.includes("Reply OK to send it, or NO to handle it yourself."))).toBe(true);
+
+    await t.coordinator.onWhatsApp({ id: "wamid.o9", from: OWNER, name: "Owner", text: "ok" });
+    expect(t.db.pendingDrafts()).toHaveLength(0);
+    expect(t.whatsapp.documents.map((d) => d.filename)).toEqual(["EST-00012.pdf"]);
+    expect(t.whatsapp.sent.at(-1)).toEqual({ to: OWNER, body: "Sent EST-00012 to the customer." });
+  });
+
+  it("lets the owner say NO on WhatsApp", async () => {
+    const { t } = withZoho();
+    t.llm.handlers.gatherer = pipesAndElbows;
+    await t.coordinator.onWhatsApp(fromCustomer("50 pipes and 20 elbows, 4 inch"));
+    await t.coordinator.onWhatsApp({ id: "wamid.o10", from: OWNER, name: "Owner", text: "No" });
+    expect(t.db.getEnquiry(1)!.status).toBe("needs_human");
+    expect(t.whatsapp.sent.filter((m) => m.to === CUSTOMER).some((m) => m.body.includes("Quotation"))).toBe(false);
+  });
+
+  it("tells the owner why Zoho refused, and quotes as text", async () => {
+    const { t } = withZoho("Zoho POST /estimates failed: Please select a place of supply.");
+    t.llm.handlers.gatherer = pipes;
+    await t.coordinator.onWhatsApp(fromCustomer("10 pipes 4 inch"));
+    expect(t.db.alerts().some((a) => a.text.includes("Zoho said: Zoho POST /estimates failed: Please select a place of supply."))).toBe(true);
+    const [draft] = t.db.pendingDrafts();
+    await t.coordinator.approveDraft(draft.id);
+    expect(t.whatsapp.documents).toHaveLength(0);
+    expect(t.whatsapp.sent.filter((m) => m.to === CUSTOMER).at(-1)!.body).toContain("*Quotation Q-00001*");
   });
 });

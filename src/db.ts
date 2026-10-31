@@ -151,6 +151,8 @@ export interface Settings {
   currency: string;
   tone: string;
   requireApproval: boolean;
+  /** Quotes whose items are all in stock and all in Zoho go to the customer as the Zoho PDF without waiting. */
+  autoSendStockQuotes: boolean;
   margin: {
     /** Use the price list's selling price when it has one ("list"), or always cost plus margin ("cost"). */
     priceBasis: "list" | "cost";
@@ -202,6 +204,7 @@ export const DEFAULT_SETTINGS: Settings = {
   currency: "AED",
   tone: "Polite, warm and professional, like an experienced senior sales and customer service executive. Use simple, clear English.",
   requireApproval: true,
+  autoSendStockQuotes: true,
   margin: {
     priceBasis: "list",
     defaultPercent: 15,

@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import express, { type NextFunction, type Request, type Response } from "express";
 import type { Coordinator } from "./agents/coordinator.js";
-import { parseOwnerReplies, parseWebhook, verifySignature } from "./channels/whatsapp.js";
+import { checkWhatsApp, linkWhatsAppAccount, parseOwnerReplies, parseWebhook, verifySignature } from "./channels/whatsapp.js";
 import type { Config } from "./config.js";
 import { createBackup, restoreBackup } from "./backup.js";
 import { readExcelCatalog } from "./catalog/excel.js";
@@ -42,6 +42,7 @@ export function connectionStatus(config: AppConfig) {
       connected: Boolean(wa.accessToken && wa.phoneNumberId),
       webhookReady: Boolean(wa.appSecret && wa.verifyToken),
       webhookUrl: `${(config.publicUrl ?? "").replace(/\/$/, "")}/webhook/whatsapp`,
+      businessAccountId: wa.businessAccountId ?? "",
       followupTemplate: wa.followupTemplate,
       supplierTemplate: wa.supplierTemplate,
     },
@@ -145,6 +146,19 @@ export function createApp(coordinator: Coordinator, config: AppConfig) {
 
   app.get("/api/connections", (_req, res) => {
     res.json(connectionStatus(config));
+  });
+
+  // Asks Meta directly whether WhatsApp is set up right, and links the WhatsApp account to the app.
+  const accountId = (value: unknown) => String(value ?? "").replace(/\D/g, "") || config.whatsapp.businessAccountId;
+  app.post("/api/whatsapp/check", async (req, res) => {
+    res.json(await checkWhatsApp(config.whatsapp, accountId(req.body?.businessAccountId)));
+  });
+  app.post("/api/whatsapp/link", async (req, res) => {
+    const id = accountId(req.body?.businessAccountId);
+    if (!id) return void res.status(400).json({ error: "Enter the Messaging account ID from Meta's API setup" });
+    const error = await linkWhatsAppAccount(config.whatsapp, id);
+    if (error) return void res.status(400).json({ error });
+    res.json(await checkWhatsApp(config.whatsapp, id));
   });
 
   // Backup: settings, suppliers and customers as one file to keep; restore it after a reset or on a new server.

@@ -42,7 +42,10 @@ export class FakeWhatsApp implements WhatsApp {
   async sendTemplate(to: string, name: string, _language: string, params: string[]) {
     this.templates.push({ to, name, params });
   }
-  async sendDocument() {}
+  documents: { to: string; filename: string; caption: string }[] = [];
+  async sendDocument(to: string, _file: Buffer, filename: string, caption: string) {
+    this.documents.push({ to, filename, caption });
+  }
 }
 
 export class FakeMailer implements Mailer {
