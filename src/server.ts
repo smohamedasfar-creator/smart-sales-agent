@@ -93,7 +93,7 @@ export function createApp(coordinator: Coordinator, config: AppConfig) {
   app.use("/api", auth);
 
   app.get("/api/enquiries", (_req, res) => {
-    res.json(db.listEnquiries());
+    res.json(db.listEnquiries().map((e) => ({ ...e, working: coordinator.workingOn(e.phone) })));
   });
 
   app.get("/api/enquiries/:id", (req, res) => {
@@ -105,7 +105,9 @@ export function createApp(coordinator: Coordinator, config: AppConfig) {
       customer,
       messages: db.recentMessages(customer.id, 100),
       items: db.items(enquiry.id),
-      supplierRequests: db.supplierRequests(enquiry.id),
+      supplierRequests: db.supplierRequests(enquiry.id).map((r) => ({ ...r, supplier_name: db.getSupplier(r.supplier_id)?.name ?? null })),
+      activity: db.activity(enquiry.id),
+      working: coordinator.workingOn(customer.phone),
     });
   });
 

@@ -31,6 +31,7 @@ ${UNTRUSTED_NOTE}`,
     });
     await ctx.whatsapp.sendText(customer.phone, text);
     ctx.db.addOutbound(customer.id, enquiry.id, text);
+    ctx.db.addActivity(enquiry.id, customer.id, "Follow-up", `Sent follow-up ${enquiry.followups_sent + 1} for ${enquiry.quote_ref}.`);
   } else if (whatsapp.followupTemplate) {
     // Outside the 24-hour window only an approved template can be sent.
     await ctx.whatsapp.sendTemplate(customer.phone, whatsapp.followupTemplate, whatsapp.followupTemplateLanguage, [
@@ -71,6 +72,7 @@ export async function runSupplierChecks(ctx: AgentContext): Promise<number[]> {
     const age = hoursSince(request.sent_at, now);
     if (age >= settings.supplierGiveUpHours) {
       ctx.db.setSupplierRequestStatus(request.id, "timeout");
+      ctx.db.addActivity(request.enquiry_id, null, "Follow-up", `${ctx.db.getSupplier(request.supplier_id)?.name ?? "A supplier"} didn't answer in time; going ahead without them.`);
       const all = ctx.db.supplierRequests(request.enquiry_id);
       if (all.every((r) => r.status === "answered" || r.status === "timeout")) finished.add(request.enquiry_id);
     } else if (request.status === "sent" && age >= settings.supplierReminderHours) {
@@ -86,6 +88,7 @@ export async function runSupplierChecks(ctx: AgentContext): Promise<number[]> {
         ctx.log(`Reminder to supplier ${supplier.name} failed: ${(error as Error).message}`);
       }
       ctx.db.setSupplierRequestStatus(request.id, "reminded");
+      ctx.db.addActivity(request.enquiry_id, null, "Follow-up", `Reminded ${supplier.name} about the price request.`);
     }
   }
   return [...finished];

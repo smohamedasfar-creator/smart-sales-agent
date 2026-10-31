@@ -247,26 +247,56 @@ async function reject(id) { await api(`/drafts/${id}/reject`, { method: "POST" }
 
 async function loadEnquiries() {
   const rows = await api("/enquiries");
-  $("enquiry-table").innerHTML = `<tr><th>#</th><th>Customer</th><th>Status</th><th>Quote</th><th>Updated</th></tr>` +
+  $("enquiry-table").innerHTML = `<tr><th>#</th><th>Customer</th><th>Status</th><th>Now</th><th>Quote</th><th>Updated</th></tr>` +
     rows.map((e) => `<tr class="clickable" onclick="showEnquiry(${e.id})">
       <td>E${e.id}</td><td>${esc(e.name || "")} <span class="muted">+${esc(e.phone)}</span></td>
-      <td><span class="badge ${esc(e.status)}">${esc(e.status.replace("_", " "))}</span></td>
+      <td><span class="badge ${esc(e.status)}">${esc(STATUS_LABEL[e.status] || e.status)}</span></td>
+      <td class="muted">${e.working ? `${esc(e.working.agent)} is working…` : esc(nowText(e))}</td>
       <td>${esc(e.quote_ref || "")} ${e.quote_total != null ? esc(e.quote_total.toFixed(2)) : ""}</td>
       <td class="muted">${new Date(e.updated_at).toLocaleString()}</td></tr>`).join("");
 }
 
-async function showEnquiry(id) {
+// What each status means, in the order an enquiry goes through them.
+const STEPS = [["gathering", "1. Gathering"], ["checking", "2. Checking prices"], ["waiting_supplier", "3. Asking suppliers"],
+  ["awaiting_details", "4. Customer details"], ["awaiting_approval", "5. Your approval"], ["quoted", "6. Quote sent"], ["won", "7. Order won"]];
+const STATUS_LABEL = { gathering: "gathering", checking: "checking prices", waiting_supplier: "asking suppliers", awaiting_details: "customer details",
+  awaiting_approval: "your approval", quoted: "quote sent", won: "order won", lost: "lost", needs_human: "with you" };
+function nowText(e) {
+  return {
+    gathering: "Waiting for the customer's answer", checking: "Checking prices", waiting_supplier: "Waiting for suppliers' prices",
+    awaiting_details: "Waiting for the customer's details", awaiting_approval: "Waiting for your approval", quoted: "Waiting for the customer's yes",
+    won: "Done", lost: "Closed", needs_human: "You are handling it",
+  }[e.status] || "";
+}
+let openEnquiry = null;
+setInterval(() => { if (openEnquiry && !$("enquiries").hidden) { showEnquiry(openEnquiry, true); loadEnquiries(); } }, 5000);
+
+async function showEnquiry(id, quiet) {
+  openEnquiry = id;
+  if (quiet && document.activeElement && document.activeElement.closest && document.activeElement.closest("#enquiry-detail")) return; // don't disturb typing
   const d = await api(`/enquiries/${id}`);
   settingsCache = settingsCache || (await api("/settings"));
   const items = d.items.map((i) => `<tr><td>${esc(i.quantity)} ${esc(i.unit || "")}</td><td>${esc(i.description)}<div class="muted">${esc(i.matched_name || "not matched")}</div></td>
     <td>${i.available === 1 ? esc(i.source) : i.available === 0 ? "not available" : "?"}</td><td>${esc(i.cost ?? "")}</td><td>${esc(i.list_price ?? "")}</td></tr>`).join("");
-  const suppliers = d.supplierRequests.map((r) => `<li>Supplier #${esc(r.supplier_id)} by ${esc(r.channel)}: ${esc(r.status)}${r.reply ? ` — "${esc(r.reply.slice(0, 200))}"` : ""}</li>`).join("");
+  const suppliers = d.supplierRequests.map((r) => `<li>${esc(r.supplier_name || `Supplier #${r.supplier_id}`)} by ${esc(r.channel)}: ${esc(r.status)}${r.reply ? ` — "${esc(r.reply.slice(0, 200))}"` : ""}</li>`).join("");
+  const at = STEPS.findIndex(([k]) => k === d.enquiry.status);
+  const steps = STEPS.map(([k, label], i) => `<span class="badge ${k === d.enquiry.status ? "won" : ""}" style="${i < at ? "opacity:.55" : k === d.enquiry.status ? "font-weight:600" : "opacity:.35"}">${label}</span>`).join(" ");
+  const withYou = d.enquiry.status === "needs_human";
+  const control = withYou
+    ? `<div class="card" style="border-color:var(--warn);margin:8px 0"><strong>In control: You</strong> · ${esc(d.enquiry.notes || "You are handling this chat")}.
+        The agents stay quiet in this chat. <button class="secondary" onclick="resume(${d.enquiry.id})">Let the agents continue</button></div>`
+    : `<div class="card" style="margin:8px 0"><strong>In control: Agents</strong> · ${d.working ? `<strong>${esc(d.working.agent)}</strong> is working…` : esc(nowText(d.enquiry))}${d.enquiry.notes && d.enquiry.status !== "won" ? ` <span class="muted">(${esc(d.enquiry.notes)})</span>` : ""}</div>`;
+  const timeline = d.activity.length
+    ? `<div class="scroll"><table><tr><th>Time</th><th>Agent</th><th>What happened</th></tr>${d.activity.map((a) => `<tr><td class="muted" style="white-space:nowrap">${new Date(a.created_at).toLocaleTimeString()}</td><td><strong>${esc(a.agent)}</strong></td><td>${esc(a.text)}</td></tr>`).join("")}</table></div>`
+    : `<p class="muted">No steps recorded yet.</p>`;
   $("enquiry-detail").innerHTML = `
     <div class="card">
       <div class="row"><strong>E${d.enquiry.id} · ${esc(d.customer.name || "")} +${esc(d.customer.phone)}</strong>
-        <span class="badge ${esc(d.enquiry.status)}">${esc(d.enquiry.status.replace("_", " "))}</span>
-        ${d.enquiry.notes ? `<span class="muted">${esc(d.enquiry.notes)}</span>` : ""}
-        ${d.enquiry.status === "needs_human" ? `<button class="secondary" onclick="resume(${d.enquiry.id})">Let the agents continue</button>` : ""}</div>
+        <span class="badge ${esc(d.enquiry.status)}">${esc(STATUS_LABEL[d.enquiry.status] || d.enquiry.status)}</span></div>
+      <div class="row" style="margin-top:8px">${steps}</div>
+      ${control}
+      <label>What the agents did</label>
+      ${timeline}
       <div class="grid" style="margin-top:8px">
         <div><label>Name</label><input id="c-name" value="${esc(d.customer.name || "")}"></div>
         <div><label>Company</label><input id="c-company" value="${esc(d.customer.company || "")}"></div>
