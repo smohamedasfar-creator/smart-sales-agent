@@ -19,16 +19,18 @@ and you scan a QR code with it.
 
 ## 2. The server (15 minutes)
 
-The app runs on a server that is on day and night, with an https address. **Railway** (railway.com) is the simplest:
+The app runs on a server that is on day and night, with an https address. **Render** (render.com) is simple and
+works from the browser (Railway was closed to new sign-ups on 31 October 2026):
 
-1. Sign in to Railway with your GitHub account, **New project → Deploy from GitHub repo → smart-sales-agent**.
-   (I'll first move the work onto the repo's main branch, or we pick the branch `claude/sweet-noether-5qzf4e`.)
-2. **Add a volume** mounted at `/app/data` (it keeps the database and your price list).
-3. **Variables**: `DASHBOARD_PASSWORD` (a strong password of your own), `ANTHROPIC_API_KEY` (step 1),
-   `PUBLIC_URL` (the address Railway gives, under Settings → Networking → Generate domain). The WhatsApp values
-   come in step 4.
-4. Open the address, log in with any user name and your password. **Settings → Price list → Upload** your stock list.
-5. In **Test chat**, write as a customer ("Hi, I need 10 UGREEN HDMI cable"). The agents answer in Enquiries, and
+1. Sign up at render.com with your GitHub account. **New → Web Service → GitHub → smart-sales-agent**.
+2. Name `smart-sales-agent`, region **Frankfurt**, branch `main`, language **Docker**, instance **Starter**
+   (about USD 7 a month; the free plan sleeps and can't keep data).
+3. **Environment variables**: `DASHBOARD_PASSWORD` (a strong password of your own), `ANTHROPIC_API_KEY` (step 1),
+   `DATABASE_PATH` = `/app/data/sales-agent.sqlite`, `EXCEL_PATH` = `/app/data/price-list.xlsx`.
+4. **Advanced → Add Disk**: mount path `/app/data`, 1 GB.
+5. **Deploy**. When it's live, add `PUBLIC_URL` = the address Render shows (`https://….onrender.com`).
+6. Open the address, log in with any user name and your password. **Settings → Price list → Upload** your stock list.
+7. In **Test chat**, write as a customer ("Hi, I need 10 UGREEN HDMI cable"). The agents answer in Enquiries, and
    the quote waits in Approvals. Nothing goes to WhatsApp yet.
 
 ## 3. Choose a Meta partner (10 minutes)
