@@ -91,9 +91,9 @@ export class Coordinator {
 
   onWhatsApp(message: InboundMessage): Promise<void> {
     return this.serial(message.from, async () => {
-      if (message.from === this.ctx.ownerPhone) {
-        // The owner messages the business number to keep WhatsApp's 24-hour window open for alerts.
-        this.ctx.log(`Message from the owner: ${message.text}`);
+      if (this.ctx.ownerPhone && samePhone(message.from, this.ctx.ownerPhone)) {
+        // The owner: "OK" sends the waiting quote, "NO" takes it over; anything else just keeps WhatsApp's 24-hour window open.
+        await this.onOwnerMessage(message.text);
         return;
       }
       const contact = this.ctx.db.getSettings().personalContacts.find((c) => samePhone(c.phone, message.from));
@@ -117,6 +117,37 @@ export class Coordinator {
       if (!this.ctx.db.addInbound(customer.id, message.text, message.id)) return;
       await this.handleCustomer(customer);
     });
+  }
+
+  /** Lets the owner approve or reject the waiting quote from WhatsApp. A quote number in the message picks that one. */
+  private async onOwnerMessage(text: string): Promise<void> {
+    const { db } = this.ctx;
+    const answer = text.trim().toLowerCase();
+    const yes = /^(ok|okay|yes|approve|approved|send|send it)\b/.test(answer);
+    const no = /^(no|reject|stop|hold)\b/.test(answer);
+    if (!yes && !no) {
+      this.ctx.log(`Message from the owner: ${text}`);
+      return;
+    }
+    const pending = db.pendingDrafts();
+    const named = pending.find((d) => {
+      const ref = d.enquiry_id ? db.getEnquiry(d.enquiry_id)?.quote_ref : null;
+      return ref ? answer.includes(ref.toLowerCase()) : false;
+    });
+    const draft = named ?? pending.at(-1);
+    if (!draft) {
+      await this.notifyOwner("Nothing is waiting for your approval.");
+      return;
+    }
+    const ref = (draft.enquiry_id && db.getEnquiry(draft.enquiry_id)?.quote_ref) || `draft ${draft.id}`;
+    const left = pending.length - 1;
+    if (yes) {
+      await this.approveDraft(draft.id);
+      await this.notifyOwner(`Sent ${ref} to the customer.${left ? ` ${left} more waiting: reply OK or NO again.` : ""}`);
+    } else {
+      this.rejectDraft(draft.id);
+      await this.notifyOwner(`${ref} not sent; the chat is yours now (Enquiries → "Let the agents continue" to hand it back).${left ? ` ${left} more waiting.` : ""}`);
+    }
   }
 
   /**
@@ -425,13 +456,22 @@ export class Coordinator {
     const quote = await createQuote(this.ctx, enquiry, customer, priced);
     const warnings = priceWarnings(db.items(enquiry.id), priced);
     this.step(customer, enquiry.id, "Estimate", `Wrote quotation ${quote.ref} (${money(quote.total, settings)}).`);
+    // Every item in stock and in Zoho: the Zoho estimate goes straight to the customer.
+    const stockAndZoho = Boolean(quote.zohoEstimateId) && db.items(enquiry.id).every((i) => i.source === "stock");
+    if (settings.autoSendStockQuotes && stockAndZoho && warnings.length === 0) {
+      await this.sendQuote(customer, enquiry.id, quote.body);
+      await this.quoteSent(enquiry.id);
+      await this.notifyOwner(`Sent Zoho estimate ${quote.ref} to ${customerLine(customer)} (${money(quote.total, settings)}): all items in stock.`);
+      return;
+    }
     if (settings.requireApproval || warnings.length > 0) {
       db.addDraft({ enquiry_id: enquiry.id, kind: "quote", to_phone: customer.phone, body: quote.body });
       db.setStatus(enquiry.id, "awaiting_approval", warnings.length ? `Check prices: ${warnings.join("; ")}` : undefined);
       db.addActivity(enquiry.id, customer.id, "Coordinator", `Waiting for your approval${warnings.length ? `. Please check: ${warnings.join("; ")}` : ""}.`);
       await this.notifyOwner(
         `Quote ${quote.ref} for ${customerLine(customer)} (${money(quote.total, settings)}) is waiting for your approval.` +
-          (warnings.length ? ` Please check: ${warnings.join("; ")}.` : ""),
+          (warnings.length ? ` Please check: ${warnings.join("; ")}.` : "") +
+          ` Reply OK to send it, or NO to handle it yourself.`,
       );
       return;
     }

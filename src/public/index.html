@@ -118,7 +118,8 @@
 
     <div class="card">
       <strong>Quotes</strong>
-      <label><input type="checkbox" id="requireApproval" style="width:auto"> Quotes wait for my approval before they are sent (recommended)</label>
+      <label><input type="checkbox" id="requireApproval" style="width:auto"> Quotes wait for my approval before they are sent (recommended). With OWNER_PHONE set, reply OK or NO on WhatsApp.</label>
+      <label><input type="checkbox" id="autoSendStockQuotes" style="width:auto"> When every item is in stock and in Zoho, send the Zoho estimate straight away</label>
       <label><input type="checkbox" id="requireDetails" style="width:auto"> Ask new customers for name, company, emirate and TRN before sending a quote</label>
       <div class="grid">
         <div><label>Prices come from</label>
@@ -395,6 +396,7 @@ async function loadSettings() {
   summary = sum;
   plain.forEach((key) => ($(key).value = s[key] ?? ""));
   $("requireApproval").checked = s.requireApproval;
+  $("autoSendStockQuotes").checked = s.autoSendStockQuotes;
   $("requireDetails").checked = s.requireDetails;
   $("firstOrderOffer").checked = s.firstOrderOffer;
   $("followupHours").value = s.followupHours.join(", ");
@@ -539,7 +541,7 @@ $("save-settings").addEventListener("click", async () => {
   if (levels.length === 0) { alert("Keep at least one customer level"); return; }
   levels[0].uplift = 0;
   const body = {
-    requireApproval: $("requireApproval").checked, requireDetails: $("requireDetails").checked, firstOrderOffer: $("firstOrderOffer").checked,
+    requireApproval: $("requireApproval").checked, autoSendStockQuotes: $("autoSendStockQuotes").checked, requireDetails: $("requireDetails").checked, firstOrderOffer: $("firstOrderOffer").checked,
     levels, levelByCategory: edit.levelByCategory,
     newCustomerLevel: Math.min(Number($("newCustomerLevel").value) || 1, levels.length),
     firstOrderLevel: Math.min(Number($("firstOrderLevel").value) || 1, levels.length),

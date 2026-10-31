@@ -12,6 +12,8 @@ export interface Quote {
   zohoEstimateId: string | null;
 }
 
+const key = (text: string) => text.trim().toLowerCase();
+
 export async function createQuote(
   ctx: AgentContext,
   enquiry: Enquiry,
@@ -24,23 +26,26 @@ export async function createQuote(
 
   if (ctx.zoho) {
     try {
-      const catalog = await ctx.catalog.items();
-      const zohoIds = new Map(catalog.filter((c) => c.zohoItemId).map((c) => [c.sku, c.zohoItemId!]));
-      const customerId = await ctx.zoho.customerId(customer.phone, customer.name, customer.company);
-      const estimate = await ctx.zoho.createEstimate(
-        customerId,
-        priced.lines.map((line) => ({
-          zohoItemId: line.zohoSku ? zohoIds.get(line.zohoSku) : undefined,
-          name: line.name,
-          quantity: line.quantity,
-          rate: line.unitPrice,
-          unit: line.unit,
-        })),
-        settings.quoteValidityDays,
-        ref,
-      );
-      zohoEstimateId = estimate.id;
-      ref = estimate.number;
+      // Each line must be an item in Zoho (matched by SKU, or by name); a quote with other items stays out of Zoho.
+      const zohoItems = await ctx.zoho.items();
+      const bySku = new Map(zohoItems.map((z) => [key(z.sku), z.zohoItemId]));
+      const byName = new Map(zohoItems.map((z) => [key(z.name), z.zohoItemId]));
+      const ids = priced.lines.map((line) => (line.zohoSku && bySku.get(key(line.zohoSku))) || byName.get(key(line.name)));
+      if (ids.every(Boolean)) {
+        const customerId = await ctx.zoho.customerId(customer.phone, customer.name, customer.company);
+        const estimate = await ctx.zoho.createEstimate(
+          customerId,
+          priced.lines.map((line, i) => ({ zohoItemId: ids[i], name: line.name, quantity: line.quantity, rate: line.unitPrice, unit: line.unit })),
+          settings.quoteValidityDays,
+          ref,
+        );
+        zohoEstimateId = estimate.id;
+        ref = estimate.number;
+        ctx.db.addActivity(enquiry.id, customer.id, "Estimate", `Created estimate ${ref} in Zoho.`);
+      } else {
+        const missing = priced.lines.filter((_, i) => !ids[i]).map((l) => l.name);
+        ctx.db.addActivity(enquiry.id, customer.id, "Estimate", `Not created in Zoho: ${missing.join(", ")} ${missing.length > 1 ? "aren't" : "isn't"} a Zoho item.`);
+      }
     } catch (error) {
       // Shown to the owner, so a Zoho setting that needs fixing doesn't go unnoticed.
       const reason = (error as Error).message.slice(0, 400);
