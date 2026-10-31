@@ -339,6 +339,10 @@ describe("brands, levels and new customers", () => {
       ["Pegler", 2 * 24.73],
     ]);
     expect(t.whatsapp.sent.find((m) => m.to === OWNER && m.body.startsWith("Order confirmed"))!.body).toContain("By brand: ");
+    // The enquiry's timeline shows which agent did what, in order.
+    const agents = [...new Set(t.db.activity(1).map((a) => a.agent))];
+    expect(agents).toEqual(["Coordinator", "Requirement Gatherer", "Price & Stock", "Cosmoplast agent", "Pegler agent", "Supplier Enquiry", "Pricing & Margin", "Estimate", "You"]);
+    expect(t.db.activity(1).some((a) => a.text.includes("Asked Gulf Pipes for PVC elbow 4 inch"))).toBe(true);
   });
 
   it("prices a new customer's first order at Level 1, then their own level", async () => {

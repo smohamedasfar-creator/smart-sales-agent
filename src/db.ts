@@ -309,6 +309,14 @@ CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS activity (
+  id INTEGER PRIMARY KEY,
+  enquiry_id INTEGER REFERENCES enquiries(id),
+  customer_id INTEGER REFERENCES customers(id),
+  agent TEXT NOT NULL,
+  text TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS alerts (
   id INTEGER PRIMARY KEY,
   text TEXT NOT NULL,
@@ -402,6 +410,10 @@ export class Db {
 
   // Customers and messages
 
+  customers(): Customer[] {
+    return this.all<Customer>("SELECT * FROM customers ORDER BY id");
+  }
+
   upsertCustomer(phone: string, name: string | null): Customer {
     const existing = this.get<Customer>("SELECT * FROM customers WHERE phone = ?", phone);
     if (existing) {
@@ -421,6 +433,7 @@ export class Db {
       if (!samePhone(customer.phone, phone)) continue;
       if (this.get("SELECT id FROM enquiries WHERE customer_id = ? LIMIT 1", customer.id)) continue;
       this.run("DELETE FROM messages WHERE customer_id = ?", customer.id);
+      this.run("DELETE FROM activity WHERE customer_id = ?", customer.id);
       this.run("DELETE FROM customers WHERE id = ?", customer.id);
     }
   }
@@ -468,6 +481,16 @@ export class Db {
   /** Links the customer's messages that have no enquiry yet to this enquiry. */
   attachMessages(customerId: number, enquiryId: number): void {
     this.run("UPDATE messages SET enquiry_id = ? WHERE customer_id = ? AND enquiry_id IS NULL", enquiryId, customerId);
+    this.run("UPDATE activity SET enquiry_id = ? WHERE customer_id = ? AND enquiry_id IS NULL", enquiryId, customerId);
+  }
+
+  /** One step an agent (or the owner) took, shown on the enquiry's timeline. */
+  addActivity(enquiryId: number | null, customerId: number | null, agent: string, text: string): void {
+    this.run("INSERT INTO activity (enquiry_id, customer_id, agent, text, created_at) VALUES (?, ?, ?, ?, ?)", enquiryId, customerId, agent, text.slice(0, 2000), this.iso());
+  }
+
+  activity(enquiryId: number): { id: number; agent: string; text: string; created_at: string }[] {
+    return this.all("SELECT id, agent, text, created_at FROM activity WHERE enquiry_id = ? ORDER BY id", enquiryId);
   }
 
   recentMessages(customerId: number, limit = 30): Message[] {
