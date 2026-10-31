@@ -269,6 +269,9 @@ describe("enquiry to order", () => {
     const enquiry = t.db.openEnquiry(1)!;
     expect(enquiry.status).toBe("needs_human");
     expect(enquiry.notes).toContain("API down");
+    // The customer still gets an answer, and the owner sees why.
+    expect(t.whatsapp.sent.find((m) => m.to === CUSTOMER)!.body).toBe("Thank you for your message. Our team will get back to you shortly.");
+    expect(t.db.alerts()[0].text).toContain("Reason: API down");
   });
 });
 
@@ -399,5 +402,55 @@ describe("brands, levels and new customers", () => {
     expect(t.llm.calls.filter((c) => c.agent === "reception").at(-1)!.prompt).toContain("Which PVC pipe would you like? 1) 4 inch  2) 6 inch");
     // The gatherer saw both pipes from the stock list.
     expect(t.llm.calls.find((c) => c.agent === "options")!.prompt).toMatch(/PVC Pipe 4" 6m[\s\S]*PVC Pipe 6" 6m/);
+  });
+});
+
+describe("keeping the conversation going when Claude has trouble", () => {
+  const CABLES: CatalogItem[] = [
+    { sku: "C6-PVC", name: "OPTERNA Cat6 UTP PVC Cable 305mtr/Box, Grey", brand: "OPTERNA", category: "CAT6 CABLE", unit: "box", price: null, resellerPrice: 255, cost: 200, stock: 28 },
+    { sku: "C6-LSZH", name: "OPTERNA Cat6 UTP LSZH Cable 305mtr/Box, Green", brand: "OPTERNA", category: "CAT6 CABLE", unit: "box", price: null, resellerPrice: 280, cost: 220, stock: 4 },
+    { sku: "C6-OUT", name: "OPTERNA Cat6 UTP PE Outdoor Cable 500mtr/Reel, Black", brand: "OPTERNA", category: "CAT6 CABLE", unit: "reel", price: null, resellerPrice: 400, cost: 320, stock: 0 },
+  ];
+  const ask = () => {
+    const t = setup({ catalog: CABLES });
+    t.llm.handlers.coordinator = () => ({ intent: "new_enquiry" });
+    t.llm.handlers.gatherer = () => ({ items: [{ description: "Opterna CAT6 cable", quantity: 5, unit: "roll" }], missing_questions: [] });
+    return t;
+  };
+
+  it("asks which one from the stock list when the options step fails", async () => {
+    const t = ask();
+    t.llm.handlers.options = () => {
+      throw new Error("429 rate limited");
+    };
+    await t.coordinator.onWhatsApp(fromCustomer("OPTERNA CABLE I NEED 5 ROLL CAT6"));
+    expect(t.db.getEnquiry(1)!.status).toBe("gathering");
+    const prompt = t.llm.calls.filter((c) => c.agent === "reception").at(-1)!.prompt;
+    expect(prompt).toContain("Which Opterna CAT6 cable would you like? 1) PVC 305MTR/BOX, GREY  2) LSZH 305MTR/BOX, GREEN  3) PE OUTDOOR 500MTR/REEL, BLACK (on order)");
+  });
+
+  it("sends the questions as they are when the reply writer fails too", async () => {
+    const t = ask();
+    t.llm.handlers.options = () => ({ questions: ["Which CAT6 cable: 1) PVC grey 2) LSZH green?"] });
+    t.llm.handlers.reception = () => {
+      throw new Error("timeout");
+    };
+    await t.coordinator.onWhatsApp(fromCustomer("OPTERNA CABLE I NEED 5 ROLL CAT6"));
+    expect(t.whatsapp.sent.find((m) => m.to === CUSTOMER)!.body).toBe(
+      "Thank you, Ali. To prepare your quotation, could you please confirm:\n- Which CAT6 cable: 1) PVC grey 2) LSZH green?",
+    );
+    expect(t.db.getEnquiry(1)!.status).toBe("gathering");
+  });
+
+  it("picks up an enquiry that a restart interrupted", async () => {
+    const t = ask();
+    const customer = t.db.upsertCustomer(CUSTOMER, "Ali");
+    t.db.addInbound(customer.id, "OPTERNA CABLE I NEED 5 ROLL CAT6", "wamid.r1");
+    t.db.attachMessages(customer.id, t.db.createEnquiry(customer.id).id);
+    t.llm.handlers.options = () => ({ questions: ["Which CAT6 cable?"] });
+    await Promise.all(t.coordinator.resumeInterrupted());
+    expect(t.whatsapp.sent.filter((m) => m.to === CUSTOMER)).toHaveLength(1);
+    // Nothing left to pick up the second time.
+    expect(t.coordinator.resumeInterrupted()).toHaveLength(0);
   });
 });

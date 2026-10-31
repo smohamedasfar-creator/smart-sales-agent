@@ -56,6 +56,7 @@ const ctx: AgentContext = {
 };
 
 const coordinator = new Coordinator(ctx);
+void Promise.all(coordinator.resumeInterrupted());
 createApp(coordinator, config).listen(config.port, () => log(`Smart Sales Agent running on port ${config.port}`));
 
 let ticking = false;
