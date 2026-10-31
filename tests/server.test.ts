@@ -93,6 +93,18 @@ describe("WhatsApp Business app on the same number", () => {
   });
 });
 
+describe("privacy policy", () => {
+  it("is public and shows the business name", async () => {
+    const { t, base } = await start();
+    t.db.saveSettings({ ...t.db.getSettings(), businessName: "Jupiter Plus <Technology>" });
+    const response = await fetch(`${base}/privacy`);
+    expect(response.status).toBe(200);
+    const html = await response.text();
+    expect(html).toContain("Jupiter Plus &lt;Technology&gt;");
+    expect(html).toContain("delete my data");
+  });
+});
+
 describe("dashboard", () => {
   it("needs the password", async () => {
     const { base } = await start();

@@ -8,6 +8,7 @@ import { parseOwnerReplies, parseWebhook, verifySignature } from "./channels/wha
 import type { Config } from "./config.js";
 import { createBackup, restoreBackup } from "./backup.js";
 import { readExcelCatalog } from "./catalog/excel.js";
+import { privacyPage } from "./privacy.js";
 import type { CustomerDetails, Settings } from "./db.js";
 
 // HTTP server: the WhatsApp webhook (Meta calls it for every new message) and the
@@ -85,6 +86,11 @@ export function createApp(coordinator: Coordinator, config: AppConfig) {
 
   app.get("/health", (_req, res) => {
     res.json({ ok: true });
+  });
+
+  // Public, for Meta's app review: the privacy policy and data deletion instructions.
+  app.get("/privacy", (_req, res) => {
+    res.type("html").send(privacyPage(db.getSettings(), db.now().toISOString().slice(0, 10)));
   });
 
   // Dashboard and its API, behind the dashboard password.
