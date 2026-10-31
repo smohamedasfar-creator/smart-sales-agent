@@ -13,6 +13,8 @@ export interface Config {
   whatsapp: {
     accessToken: string;
     phoneNumberId: string;
+    /** The WhatsApp Business Account ID ("Messaging account ID"), used by the dashboard's connection check. */
+    businessAccountId: string;
     appSecret: string;
     verifyToken: string;
     apiVersion: string;
@@ -77,6 +79,7 @@ export function loadConfig(): Config {
     whatsapp: {
       accessToken: env("WHATSAPP_ACCESS_TOKEN"),
       phoneNumberId: env("WHATSAPP_PHONE_NUMBER_ID"),
+      businessAccountId: env("WHATSAPP_BUSINESS_ACCOUNT_ID"),
       appSecret: env("WHATSAPP_APP_SECRET"),
       verifyToken: env("WHATSAPP_VERIFY_TOKEN"),
       apiVersion: env("WHATSAPP_API_VERSION", "v23.0"),

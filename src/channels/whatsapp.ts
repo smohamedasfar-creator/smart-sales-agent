@@ -88,6 +88,50 @@ export class WhatsAppCloud implements WhatsApp {
   }
 }
 
+export interface WhatsAppCheck {
+  /** null when the token works, otherwise Meta's reason in plain words. */
+  tokenError: string | null;
+  phone: string | null;
+  /** Whether the WhatsApp Business Account sends its messages to this app; null when it couldn't be checked. */
+  linked: boolean | null;
+  linkError: string | null;
+}
+
+type Fetch = typeof fetch;
+
+async function graph(config: Config["whatsapp"], method: string, path: string, fetchFn: Fetch) {
+  const response = await fetchFn(`https://graph.facebook.com/${config.apiVersion}/${path}`, {
+    method,
+    headers: { Authorization: `Bearer ${config.accessToken}` },
+  });
+  const body = (await response.json().catch(() => ({}))) as Record<string, unknown> & { error?: { message?: string; code?: number } };
+  return { ok: response.ok, body, error: body.error ? `${body.error.message ?? "Error"}${body.error.code ? ` (code ${body.error.code})` : ""}` : null };
+}
+
+/** Asks Meta whether the access token works and whether the WhatsApp account is linked to this app. */
+export async function checkWhatsApp(config: Config["whatsapp"], businessAccountId: string, fetchFn: Fetch = fetch): Promise<WhatsAppCheck> {
+  if (!config.accessToken || !config.phoneNumberId) {
+    return { tokenError: "WHATSAPP_ACCESS_TOKEN or WHATSAPP_PHONE_NUMBER_ID is not set on the server", phone: null, linked: null, linkError: null };
+  }
+  const number = await graph(config, "GET", `${config.phoneNumberId}?fields=display_phone_number,verified_name`, fetchFn);
+  const result: WhatsAppCheck = {
+    tokenError: number.ok ? null : (number.error ?? "Meta refused the token"),
+    phone: number.ok ? String(number.body.display_phone_number ?? "") || null : null,
+    linked: null,
+    linkError: null,
+  };
+  if (!number.ok || !businessAccountId) return result;
+  const apps = await graph(config, "GET", `${businessAccountId}/subscribed_apps`, fetchFn);
+  if (!apps.ok) return { ...result, linkError: apps.error };
+  return { ...result, linked: Array.isArray(apps.body.data) && apps.body.data.length > 0 };
+}
+
+/** Links the WhatsApp Business Account to this app, so customers' messages are delivered to the webhook. */
+export async function linkWhatsAppAccount(config: Config["whatsapp"], businessAccountId: string, fetchFn: Fetch = fetch): Promise<string | null> {
+  const linked = await graph(config, "POST", `${businessAccountId}/subscribed_apps`, fetchFn);
+  return linked.ok ? null : (linked.error ?? "Meta refused the request");
+}
+
 /** Checks that a webhook call really came from Meta (X-Hub-Signature-256 header). */
 export function verifySignature(rawBody: Buffer, header: string | undefined, appSecret: string): boolean {
   if (!header?.startsWith("sha256=")) return false;

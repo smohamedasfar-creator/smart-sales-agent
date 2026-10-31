@@ -5,7 +5,7 @@ import { join } from "node:path";
 import ExcelJS from "exceljs";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
-import { parseOwnerReplies, parseWebhook } from "../src/channels/whatsapp.js";
+import { checkWhatsApp, linkWhatsAppAccount, parseOwnerReplies, parseWebhook } from "../src/channels/whatsapp.js";
 import { createApp } from "../src/server.js";
 import { setup } from "./helpers.js";
 
@@ -208,5 +208,37 @@ describe("dashboard", () => {
     expect(status.zoho.connected).toBe(false);
     expect(text).not.toContain(SECRET);
     expect(text).not.toContain("verify-me");
+  });
+});
+
+describe("WhatsApp check from the dashboard", () => {
+  const config = { accessToken: "token", phoneNumberId: "142", businessAccountId: "", appSecret: "", verifyToken: "", apiVersion: "v23.0", followupTemplate: "", followupTemplateLanguage: "en", supplierTemplate: "", supplierTemplateLanguage: "en" };
+  const reply = (status: number, body: unknown) => new Response(JSON.stringify(body), { status });
+
+  it("explains a rejected token", async () => {
+    const fake = async () => reply(401, { error: { message: "Error validating access token: Session has expired", code: 190 } });
+    const result = await checkWhatsApp(config, "2025", fake as typeof fetch);
+    expect(result.tokenError).toBe("Error validating access token: Session has expired (code 190)");
+    expect(result.linked).toBeNull();
+  });
+
+  it("finds an unlinked WhatsApp account and links it", async () => {
+    const calls: string[] = [];
+    let linked = false;
+    const fake = async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push(`${init?.method} ${String(url).split("v23.0/")[1]}`);
+      if (String(url).includes("subscribed_apps")) {
+        if (init?.method === "POST") {
+          linked = true;
+          return reply(200, { success: true });
+        }
+        return reply(200, { data: linked ? [{ whatsapp_business_api_data: { name: "Smart Sales Agent" } }] : [] });
+      }
+      return reply(200, { display_phone_number: "+1 555-209-9588" });
+    };
+    expect(await checkWhatsApp(config, "2025", fake as typeof fetch)).toEqual({ tokenError: null, phone: "+1 555-209-9588", linked: false, linkError: null });
+    expect(await linkWhatsAppAccount(config, "2025", fake as typeof fetch)).toBeNull();
+    expect((await checkWhatsApp(config, "2025", fake as typeof fetch)).linked).toBe(true);
+    expect(calls).toContain("POST 2025/subscribed_apps");
   });
 });

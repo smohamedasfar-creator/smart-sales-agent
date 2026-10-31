@@ -499,12 +499,39 @@ async function loadConnections() {
         <td>In ${link("https://developers.facebook.com/apps", "Meta for Developers → your app → WhatsApp → API setup")}: set <code>WHATSAPP_ACCESS_TOKEN</code> (a permanent System User token from ${link("https://business.facebook.com/settings/system-users", "Business settings → System users")}) and <code>WHATSAPP_PHONE_NUMBER_ID</code>.
         App settings → Basic gives <code>WHATSAPP_APP_SECRET</code>; choose any <code>WHATSAPP_VERIFY_TOKEN</code>.<br>
         Webhook (WhatsApp → Configuration): <code>${esc(c.whatsapp.webhookUrl)}</code> ${c.whatsapp.webhookReady ? "" : `<span class="badge needs_human">app secret or verify token missing</span>`}, subscribe to <em>messages</em> and <em>smb_message_echoes</em> (so the agents step back when you reply from the WhatsApp Business app).<br>
-        Templates (${link("https://business.facebook.com/wa/manage/message-templates/", "WhatsApp Manager → Message templates")}): follow-up ${c.whatsapp.followupTemplate ? `<code>${esc(c.whatsapp.followupTemplate)}</code>` : "not set"}, supplier ${c.whatsapp.supplierTemplate ? `<code>${esc(c.whatsapp.supplierTemplate)}</code>` : "not set"}.</td></tr>
+        Templates (${link("https://business.facebook.com/wa/manage/message-templates/", "WhatsApp Manager → Message templates")}): follow-up ${c.whatsapp.followupTemplate ? `<code>${esc(c.whatsapp.followupTemplate)}</code>` : "not set"}, supplier ${c.whatsapp.supplierTemplate ? `<code>${esc(c.whatsapp.supplierTemplate)}</code>` : "not set"}.
+        <div class="row" style="margin-top:8px">
+          <input id="waba-id" placeholder="Messaging account ID (from Meta's API setup)" value="${esc(c.whatsapp.businessAccountId || "")}" style="max-width:320px">
+          <button class="primary" onclick="checkWhatsApp()">Check WhatsApp</button>
+          <button class="secondary" onclick="linkWhatsApp()">Link my WhatsApp account</button>
+        </div>
+        <div id="wa-check" style="margin-top:6px"></div></td></tr>
       <tr><td><strong>Zoho</strong> (${esc(c.zoho.app === "inventory" ? "Inventory" : "Books")})</td><td>${dot(c.zoho.connected)}</td>
         <td>At ${link(`https://api-console.${c.zoho.domain}`, "Zoho API Console")} create a Self Client and a refresh token (scope <code>ZohoBooks.fullaccess.all</code> or <code>ZohoInventory.fullaccess.all</code>). Set <code>ZOHO_CLIENT_ID</code>, <code>ZOHO_CLIENT_SECRET</code>, <code>ZOHO_REFRESH_TOKEN</code>, <code>ZOHO_ORGANIZATION_ID</code> and <code>ZOHO_DOMAIN</code> (zoho.com, zoho.in, zoho.eu…). Price list in use: ${esc(c.priceList)}.</td></tr>
       <tr><td><strong>Email</strong> (suppliers)</td><td>${dot(c.email.connected)}</td>
         <td>Set <code>EMAIL_USER</code>, <code>EMAIL_PASSWORD</code> (an app password), <code>EMAIL_SMTP_HOST</code> and <code>EMAIL_IMAP_HOST</code>.${c.email.from ? ` Sending as ${esc(c.email.from)}.` : ""}</td></tr>
     </table>`;
+}
+
+function showWhatsAppCheck(r) {
+  const ok = (text) => `<div style="color:var(--accent)">✓ ${esc(text)}</div>`;
+  const bad = (text) => `<div style="color:var(--bad)">✗ ${esc(text)}</div>`;
+  $("wa-check").innerHTML = [
+    r.tokenError ? bad(`Access token: ${r.tokenError}. Generate a new token in Meta (Step 1. Try it out), copy it with the copy button and replace WHATSAPP_ACCESS_TOKEN in Render.`)
+      : ok(`Access token works${r.phone ? ` for ${r.phone}` : ""}.`),
+    r.linkError ? bad(`WhatsApp account: ${r.linkError}. Check the Messaging account ID.`)
+      : r.linked === true ? ok("WhatsApp account is linked: customers' messages come to this app.")
+      : r.linked === false ? bad("WhatsApp account is not linked yet, so customers' messages don't arrive. Click \"Link my WhatsApp account\".")
+      : (r.tokenError ? "" : `<div class="muted">Enter the Messaging account ID to check the link.</div>`),
+  ].join("");
+}
+async function checkWhatsApp() {
+  $("wa-check").textContent = "Asking Meta…";
+  showWhatsAppCheck(await api("/whatsapp/check", { method: "POST", body: { businessAccountId: $("waba-id").value } }));
+}
+async function linkWhatsApp() {
+  $("wa-check").textContent = "Linking…";
+  showWhatsAppCheck(await api("/whatsapp/link", { method: "POST", body: { businessAccountId: $("waba-id").value } }));
 }
 
 $("save-settings").addEventListener("click", async () => {
