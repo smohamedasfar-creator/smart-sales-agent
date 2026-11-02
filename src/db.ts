@@ -26,6 +26,14 @@ export const OPEN_STATUSES: EnquiryStatus[] = [
   "needs_human",
 ];
 
+export interface WhatsAppConnection {
+  accessToken: string;
+  phoneNumberId: string;
+  businessAccountId: string;
+  phone: string | null;
+  connectedAt: string;
+}
+
 export interface Customer {
   id: number;
   phone: string;
@@ -408,6 +416,22 @@ export class Db {
     this.run(
       "INSERT INTO settings (key, value) VALUES ('settings', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
       JSON.stringify(settings),
+    );
+  }
+
+  /**
+   * The WhatsApp number connected from the dashboard (Embedded Signup). Kept apart from the settings
+   * so the access token never goes into a backup file.
+   */
+  whatsappConnection(): WhatsAppConnection | null {
+    const row = this.get<{ value: string }>("SELECT value FROM settings WHERE key = 'whatsapp_connection'");
+    return row ? (JSON.parse(row.value) as WhatsAppConnection) : null;
+  }
+
+  saveWhatsAppConnection(connection: WhatsAppConnection): void {
+    this.run(
+      "INSERT INTO settings (key, value) VALUES ('whatsapp_connection', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+      JSON.stringify(connection),
     );
   }
 

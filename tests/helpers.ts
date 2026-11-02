@@ -93,6 +93,8 @@ export function setup(options: { catalog?: CatalogItem[]; followupTemplate?: str
         accessToken: "",
         phoneNumberId: "",
         appSecret: "",
+        appId: "",
+        signupConfigId: "",
         verifyToken: "",
         apiVersion: "v23.0",
         followupTemplate: options.followupTemplate ?? "",
