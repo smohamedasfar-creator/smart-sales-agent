@@ -16,6 +16,9 @@ export interface Config {
     /** The WhatsApp Business Account ID ("Messaging account ID"), used by the dashboard's connection check. */
     businessAccountId: string;
     appSecret: string;
+    /** Meta app ID and the Embedded Signup configuration ID, for "Connect WhatsApp (keep my phone)". */
+    appId: string;
+    signupConfigId: string;
     verifyToken: string;
     apiVersion: string;
     followupTemplate: string;
@@ -81,6 +84,8 @@ export function loadConfig(): Config {
       phoneNumberId: env("WHATSAPP_PHONE_NUMBER_ID"),
       businessAccountId: env("WHATSAPP_BUSINESS_ACCOUNT_ID"),
       appSecret: env("WHATSAPP_APP_SECRET"),
+      appId: env("WHATSAPP_APP_ID"),
+      signupConfigId: env("WHATSAPP_SIGNUP_CONFIG_ID"),
       verifyToken: env("WHATSAPP_VERIFY_TOKEN"),
       apiVersion: env("WHATSAPP_API_VERSION", "v23.0"),
       followupTemplate: env("WHATSAPP_FOLLOWUP_TEMPLATE"),

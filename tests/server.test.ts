@@ -4,20 +4,32 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import ExcelJS from "exceljs";
 import type { AddressInfo } from "node:net";
-import { afterEach, describe, expect, it } from "vitest";
-import { checkWhatsApp, linkWhatsAppAccount, parseOwnerReplies, parseWebhook } from "../src/channels/whatsapp.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  checkWhatsApp,
+  completeEmbeddedSignup,
+  linkWhatsAppAccount,
+  parseOwnerReplies,
+  parseWebhook,
+  SwitchingWhatsApp,
+  type WhatsApp,
+} from "../src/channels/whatsapp.js";
+import { createBackup } from "../src/backup.js";
 import { createApp } from "../src/server.js";
 import { setup } from "./helpers.js";
 
 const SECRET = "app-secret";
 const servers: { close: () => void }[] = [];
-afterEach(() => servers.splice(0).forEach((s) => s.close()));
+afterEach(() => {
+  servers.splice(0).forEach((s) => s.close());
+  vi.unstubAllGlobals();
+});
 
-async function start() {
+async function start(whatsapp: Partial<ReturnType<typeof setup>["ctx"]["config"]["whatsapp"]> = {}) {
   const t = setup();
   const app = createApp(t.coordinator, {
     dashboardPassword: "pw",
-    whatsapp: { ...t.ctx.config.whatsapp, appSecret: SECRET, verifyToken: "verify-me" },
+    whatsapp: { ...t.ctx.config.whatsapp, appSecret: SECRET, verifyToken: "verify-me", ...whatsapp },
   });
   const server = app.listen(0);
   servers.push(server);
@@ -276,5 +288,87 @@ describe("WhatsApp check from the dashboard", () => {
     expect(await linkWhatsAppAccount(config, "2025", fake as typeof fetch)).toBeNull();
     expect((await checkWhatsApp(config, "2025", fake as typeof fetch)).linked).toBe(true);
     expect(calls).toContain("POST 2025/subscribed_apps");
+  });
+
+  describe("Connect WhatsApp (keep my phone)", () => {
+    const meta = { ...setup().ctx.config.whatsapp, appId: "1602", appSecret: "app-secret", signupConfigId: "cfg" };
+    function fakeMeta(calls: string[], options: { tokenFails?: boolean } = {}): typeof fetch {
+      return (async (url: string | URL | Request, init?: RequestInit) => {
+        const path = String(url).split("v23.0/")[1];
+        calls.push(`${init?.method ?? "GET"} ${path}`);
+        if (path.startsWith("oauth/access_token")) {
+          return options.tokenFails
+            ? Response.json({ error: { message: "Invalid code" } }, { status: 400 })
+            : Response.json({ access_token: "business-token" });
+        }
+        if (path.endsWith("subscribed_apps")) return Response.json({ success: true });
+        return Response.json({ display_phone_number: "+971 52 453 0951" });
+      }) as typeof fetch;
+    }
+
+    it("swaps the code for a token and links the account, without registering the number", async () => {
+      const calls: string[] = [];
+      const result = await completeEmbeddedSignup(meta, { code: "c0de", businessAccountId: "103415319251641", phoneNumberId: "555" }, fakeMeta(calls));
+      expect(result).toEqual({ accessToken: "business-token", phoneNumberId: "555", businessAccountId: "103415319251641", phone: "+971 52 453 0951" });
+      expect(calls[0]).toBe("GET oauth/access_token?client_id=1602&client_secret=app-secret&code=c0de");
+      expect(calls).toContain("POST 103415319251641/subscribed_apps");
+      // Registering would take the number off the WhatsApp Business app on the phone.
+      expect(calls.some((c) => c.includes("register"))).toBe(false);
+    });
+
+    it("explains a refused code", async () => {
+      const result = await completeEmbeddedSignup(meta, { code: "bad", businessAccountId: "1", phoneNumberId: "2" }, fakeMeta([], { tokenFails: true }));
+      expect(result).toEqual({ error: "Meta did not give a token: Invalid code" });
+    });
+
+    it("switches the app to the connected number and keeps the token out of backups", async () => {
+      const calls: string[] = [];
+      const realFetch = globalThis.fetch;
+      const metaFetch = fakeMeta(calls);
+      vi.stubGlobal("fetch", (url: string | URL | Request, init?: RequestInit) =>
+        String(url).startsWith("https://graph.facebook.com/") ? metaFetch(url, init) : realFetch(url, init));
+      const { t, base } = await start({ appId: "1602", signupConfigId: "cfg" });
+      const headers = { Authorization: `Basic ${Buffer.from("owner:pw").toString("base64")}`, "Content-Type": "application/json" };
+
+      const config = await (await fetch(`${base}/api/whatsapp/signup-config`, { headers })).json();
+      expect(config).toEqual({ appId: "1602", configId: "cfg", apiVersion: "v23.0", ready: true });
+      const missing = await fetch(`${base}/api/whatsapp/embedded-signup`, { method: "POST", headers, body: JSON.stringify({ code: "c0de" }) });
+      expect(missing.status).toBe(400);
+
+      const response = await fetch(`${base}/api/whatsapp/embedded-signup`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ code: "c0de", businessAccountId: "103415319251641", phoneNumberId: "555" }),
+      });
+      expect(await response.json()).toEqual({ ok: true, phone: "+971 52 453 0951" });
+      expect(t.db.whatsappConnection()).toMatchObject({ accessToken: "business-token", phoneNumberId: "555" });
+      const status = await (await fetch(`${base}/api/connections`, { headers })).json();
+      expect(status.whatsapp).toMatchObject({ connected: true, phoneNumberId: "555", businessAccountId: "103415319251641" });
+      expect(t.db.alerts()[0].text).toContain("is connected");
+      expect(JSON.stringify(createBackup(t.db))).not.toContain("business-token");
+    });
+
+    it("prints messages until a number is connected, then sends through WhatsApp", async () => {
+      const printed: string[] = [];
+      const fallback: WhatsApp = {
+        sendText: async (to, body) => void printed.push(`${to}: ${body}`),
+        sendTemplate: async () => {},
+        sendDocument: async () => {},
+      };
+      const config = { ...meta, accessToken: "", phoneNumberId: "" };
+      const whatsapp = new SwitchingWhatsApp(config, fallback);
+      await whatsapp.sendText("971501111111", "hello");
+      expect(printed).toEqual(["971501111111: hello"]);
+
+      const sent: string[] = [];
+      vi.stubGlobal("fetch", async (url: string) => {
+        sent.push(url);
+        return Response.json({ messages: [{ id: "wamid" }] });
+      });
+      Object.assign(config, { accessToken: "business-token", phoneNumberId: "555" });
+      await whatsapp.sendText("971501111111", "hello again");
+      expect(sent).toEqual(["https://graph.facebook.com/v23.0/555/messages"]);
+      expect(printed).toHaveLength(1);
+    });
   });
 });

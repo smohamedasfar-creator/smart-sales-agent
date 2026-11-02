@@ -5,7 +5,7 @@ import type { Catalog } from "./catalog/catalog.js";
 import { ExcelCatalog } from "./catalog/excel.js";
 import { ZohoClient } from "./catalog/zoho.js";
 import { SmtpImapMailer } from "./channels/email.js";
-import { WhatsAppCloud, type WhatsApp } from "./channels/whatsapp.js";
+import { SwitchingWhatsApp, useConnection, type WhatsApp } from "./channels/whatsapp.js";
 import { loadConfig } from "./config.js";
 import { Db } from "./db.js";
 import { ClaudeLlm } from "./llm.js";
@@ -40,6 +40,12 @@ if (config.catalogSource === "zoho") {
   if (!existsSync(config.excel.path)) log(`No price list at ${config.excel.path} yet: upload it in the dashboard (Settings → Price list).`);
 }
 
+// A number connected from the dashboard ("Connect WhatsApp (keep my phone)") replaces the one in the environment.
+const connected = db.whatsappConnection();
+if (connected) {
+  useConnection(config.whatsapp, connected);
+  log(`WhatsApp: using ${connected.phone ?? connected.phoneNumberId}, connected from the dashboard.`);
+}
 const whatsappReady = Boolean(config.whatsapp.accessToken && config.whatsapp.phoneNumberId);
 if (!whatsappReady) log("WhatsApp is not configured: replies are printed here. Use the dashboard's Test chat.");
 
@@ -47,7 +53,7 @@ const ctx: AgentContext = {
   db,
   llm: new ClaudeLlm(config.anthropicModel),
   catalog,
-  whatsapp: whatsappReady ? new WhatsAppCloud(config.whatsapp) : new ConsoleWhatsApp(),
+  whatsapp: new SwitchingWhatsApp(config.whatsapp, new ConsoleWhatsApp()),
   mailer: config.email.enabled ? new SmtpImapMailer(config.email) : null,
   zoho,
   config,

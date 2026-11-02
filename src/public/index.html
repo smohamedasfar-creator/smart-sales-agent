@@ -509,7 +509,16 @@ async function loadConnections() {
           <button class="primary" onclick="checkWhatsApp()">Check WhatsApp</button>
           <button class="secondary" onclick="linkWhatsApp()">Link my WhatsApp account</button>
         </div>
-        <div id="wa-check" style="margin-top:6px"></div></td></tr>
+        <div id="wa-check" style="margin-top:6px"></div>
+        <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line, #ddd)">
+          <strong>Your own number, keeping your phone</strong> ${c.whatsapp.phoneNumberId ? `<span class="muted">(now using number ID ${esc(c.whatsapp.phoneNumberId)})</span>` : ""}
+          <p class="muted" style="margin:4px 0">Meta's official "Coexistence": your number stays in the WhatsApp Business app on your phone, and the agents answer customers too. You sign in with Facebook, enter your number and scan a QR code with the WhatsApp Business app.</p>
+          ${c.whatsapp.signupReady
+            ? `<button class="primary" onclick="connectWhatsApp()">Connect WhatsApp (keep my phone)</button>`
+            : `<button class="secondary" disabled>Connect WhatsApp (keep my phone)</button>
+               <div class="muted">Available after Meta approves the app as a Tech Provider. Then set <code>WHATSAPP_APP_ID</code> and <code>WHATSAPP_SIGNUP_CONFIG_ID</code> in Render.</div>`}
+          <div id="wa-signup" style="margin-top:6px"></div>
+        </div></td></tr>
       <tr><td><strong>Zoho</strong> (${esc(c.zoho.app === "inventory" ? "Inventory" : "Books")})</td><td>${dot(c.zoho.connected)}</td>
         <td>At ${link(`https://api-console.${c.zoho.domain}`, "Zoho API Console")} create a Self Client and a refresh token (scope <code>ZohoBooks.fullaccess.all</code> or <code>ZohoInventory.fullaccess.all</code>). Set <code>ZOHO_CLIENT_ID</code>, <code>ZOHO_CLIENT_SECRET</code>, <code>ZOHO_REFRESH_TOKEN</code>, <code>ZOHO_ORGANIZATION_ID</code> and <code>ZOHO_DOMAIN</code> (zoho.com, zoho.in, zoho.eu…). Price list in use: ${esc(c.priceList)}.</td></tr>
       <tr><td><strong>Email</strong> (suppliers)</td><td>${dot(c.email.connected)}</td>
@@ -536,6 +545,68 @@ async function checkWhatsApp() {
 async function linkWhatsApp() {
   $("wa-check").textContent = "Linking…";
   showWhatsAppCheck(await api("/whatsapp/link", { method: "POST", body: { businessAccountId: $("waba-id").value } }));
+}
+
+// "Connect WhatsApp (keep my phone)": Meta's Embedded Signup popup with Coexistence. Meta posts the chosen
+// account and number to this page; the login returns a one-time code that the server swaps for a token.
+let signupResult = null;
+window.addEventListener("message", (event) => {
+  let host = "";
+  try { host = new URL(event.origin).hostname; } catch { return; }
+  if (host !== "facebook.com" && !host.endsWith(".facebook.com")) return;
+  let data = event.data;
+  try { if (typeof data === "string") data = JSON.parse(data); } catch { return; }
+  if (!data || data.type !== "WA_EMBEDDED_SIGNUP") return;
+  if (data.event === "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING") signupResult = { ok: true, ...data.data };
+  else if (data.event === "FINISH") signupResult = { ok: false, reason: "This was not connected as \"keep my phone\" (Coexistence). Nothing was changed. Try again and enter the number that is in your WhatsApp Business app." };
+  else if (data.event === "CANCEL") signupResult = { ok: false, reason: "Cancelled. Nothing was changed." };
+  else if (data.event === "ERROR") signupResult = { ok: false, reason: `Meta: ${data.data?.error_message || "error"}. Nothing was changed.` };
+});
+function loadFacebook(appId, version) {
+  if (window.FB) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    window.fbAsyncInit = () => { FB.init({ appId, autoLogAppEvents: true, xfbml: false, version }); resolve(); };
+    const script = document.createElement("script");
+    script.src = "https://connect.facebook.net/en_US/sdk.js";
+    script.async = true;
+    script.crossOrigin = "anonymous";
+    script.onerror = () => reject(new Error("Could not load Facebook. Check the internet connection."));
+    document.body.appendChild(script);
+  });
+}
+async function connectWhatsApp() {
+  const ok = confirm("Connect your WhatsApp number to the agents?\n\n" +
+    "• In the Facebook window, choose your business and enter your number.\n" +
+    "• When asked, choose to connect your existing WhatsApp Business app and scan the QR code with that app.\n" +
+    "• Do NOT choose to move or register the number: your phone must keep working.\n\n" +
+    "Back up your chats on the phone first.");
+  if (!ok) return;
+  const out = $("wa-signup");
+  const config = await api("/whatsapp/signup-config");
+  if (!config.ready) { out.textContent = "Not set up on the server yet."; return; }
+  out.textContent = "Opening Facebook…";
+  try { await loadFacebook(config.appId, config.apiVersion); } catch (e) { out.textContent = e.message; return; }
+  signupResult = null;
+  // FB.login refuses async callbacks, so it gets a plain one that hands over to finishSignup.
+  FB.login((response) => { void finishSignup(response, out); }, {
+    config_id: config.configId,
+    response_type: "code",
+    override_default_response_type: true,
+    extras: { setup: {}, featureType: "whatsapp_business_app_onboarding", sessionInfoVersion: "3" },
+  });
+}
+async function finishSignup(response, out) {
+  const code = response?.authResponse?.code;
+  // Meta's message with the account and number can arrive just after the login answer.
+  for (let i = 0; i < 20 && !signupResult; i++) await new Promise((r) => setTimeout(r, 500));
+  if (!signupResult || !signupResult.ok) { out.textContent = signupResult?.reason || "Not connected. Nothing was changed."; return; }
+  if (!code) { out.textContent = "Facebook did not finish the login. Nothing was changed."; return; }
+  out.textContent = "Connecting…";
+  try {
+    const r = await api("/whatsapp/embedded-signup", { method: "POST", body: { code, businessAccountId: signupResult.waba_id, phoneNumberId: signupResult.phone_number_id } });
+    await loadConnections();
+    $("wa-signup").innerHTML = `<span style="color:var(--accent)">✓ Connected${r.phone ? ` ${esc(r.phone)}` : ""}. Your phone keeps working. Send a test message from another phone.</span>`;
+  } catch (e) { out.textContent = `Not connected: ${e.message}`; }
 }
 
 $("save-settings").addEventListener("click", async () => {

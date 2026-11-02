@@ -213,3 +213,69 @@ export function parseWebhook(body: unknown): InboundMessage[] {
   }
   return result;
 }
+
+export interface SignupResult {
+  accessToken: string;
+  phoneNumberId: string;
+  businessAccountId: string;
+  phone: string | null;
+}
+
+/**
+ * Finishes Meta's Embedded Signup ("Connect WhatsApp (keep my phone)"): swaps the one-time code for an
+ * access token and links the WhatsApp account to this app. For a number that stays in the WhatsApp
+ * Business app (Coexistence) the number is already registered, so it is NOT registered again here:
+ * registering would move it off the phone.
+ */
+export async function completeEmbeddedSignup(
+  config: Config["whatsapp"],
+  input: { code: string; businessAccountId: string; phoneNumberId: string },
+  fetchFn: Fetch = fetch,
+): Promise<SignupResult | { error: string }> {
+  if (!config.appId || !config.appSecret) return { error: "WHATSAPP_APP_ID or WHATSAPP_APP_SECRET is not set on the server" };
+  const query = new URLSearchParams({ client_id: config.appId, client_secret: config.appSecret, code: input.code });
+  const exchange = await fetchFn(`https://graph.facebook.com/${config.apiVersion}/oauth/access_token?${query}`);
+  const token = (await exchange.json().catch(() => ({}))) as { access_token?: string; error?: { message?: string } };
+  if (!exchange.ok || !token.access_token) return { error: `Meta did not give a token: ${token.error?.message ?? `HTTP ${exchange.status}`}` };
+
+  const withToken = { ...config, accessToken: token.access_token };
+  const linkError = await linkWhatsAppAccount(withToken, input.businessAccountId, fetchFn);
+  if (linkError) return { error: `Could not link the WhatsApp account: ${linkError}` };
+  const number = await graph(withToken, "GET", `${input.phoneNumberId}?fields=display_phone_number`, fetchFn);
+  return {
+    accessToken: token.access_token,
+    phoneNumberId: input.phoneNumberId,
+    businessAccountId: input.businessAccountId,
+    phone: number.ok ? String(number.body.display_phone_number ?? "") || null : null,
+  };
+}
+
+/** Points the app at a connected number. The config object is shared, so the change applies everywhere at once. */
+export function useConnection(config: Config["whatsapp"], connection: Pick<SignupResult, "accessToken" | "phoneNumberId" | "businessAccountId">): void {
+  config.accessToken = connection.accessToken;
+  config.phoneNumberId = connection.phoneNumberId;
+  config.businessAccountId = connection.businessAccountId;
+}
+
+/** Sends through WhatsApp once a number is connected, and prints messages until then. */
+export class SwitchingWhatsApp implements WhatsApp {
+  private readonly cloud: WhatsAppCloud;
+  constructor(
+    private readonly config: Config["whatsapp"],
+    private readonly fallback: WhatsApp,
+  ) {
+    this.cloud = new WhatsAppCloud(config);
+  }
+  private get target(): WhatsApp {
+    return this.config.accessToken && this.config.phoneNumberId ? this.cloud : this.fallback;
+  }
+  sendText(...args: Parameters<WhatsApp["sendText"]>) {
+    return this.target.sendText(...args);
+  }
+  sendTemplate(...args: Parameters<WhatsApp["sendTemplate"]>) {
+    return this.target.sendTemplate(...args);
+  }
+  sendDocument(...args: Parameters<WhatsApp["sendDocument"]>) {
+    return this.target.sendDocument(...args);
+  }
+}

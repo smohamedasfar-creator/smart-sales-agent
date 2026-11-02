@@ -4,7 +4,15 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import express, { type NextFunction, type Request, type Response } from "express";
 import type { Coordinator } from "./agents/coordinator.js";
-import { checkWhatsApp, linkWhatsAppAccount, parseOwnerReplies, parseWebhook, verifySignature } from "./channels/whatsapp.js";
+import {
+  checkWhatsApp,
+  completeEmbeddedSignup,
+  linkWhatsAppAccount,
+  parseOwnerReplies,
+  parseWebhook,
+  useConnection,
+  verifySignature,
+} from "./channels/whatsapp.js";
 import type { Config } from "./config.js";
 import { createBackup, restoreBackup } from "./backup.js";
 import { createReport } from "./report.js";
@@ -44,6 +52,8 @@ export function connectionStatus(config: AppConfig) {
       webhookReady: Boolean(wa.appSecret && wa.verifyToken),
       webhookUrl: `${(config.publicUrl ?? "").replace(/\/$/, "")}/webhook/whatsapp`,
       businessAccountId: wa.businessAccountId ?? "",
+      phoneNumberId: wa.phoneNumberId ?? "",
+      signupReady: Boolean(wa.appId && wa.signupConfigId && wa.appSecret),
       followupTemplate: wa.followupTemplate,
       supplierTemplate: wa.supplierTemplate,
     },
@@ -160,6 +170,31 @@ export function createApp(coordinator: Coordinator, config: AppConfig) {
     const error = await linkWhatsAppAccount(config.whatsapp, id);
     if (error) return void res.status(400).json({ error });
     res.json(await checkWhatsApp(config.whatsapp, id));
+  });
+
+  // "Connect WhatsApp (keep my phone)": Meta's Embedded Signup with Coexistence. The page runs Meta's popup;
+  // the server swaps its one-time code for a token, links the account, and switches the app to that number.
+  app.get("/api/whatsapp/signup-config", (_req, res) => {
+    const wa = config.whatsapp;
+    res.json({ appId: wa.appId, configId: wa.signupConfigId, apiVersion: wa.apiVersion, ready: Boolean(wa.appId && wa.signupConfigId && wa.appSecret) });
+  });
+  app.post("/api/whatsapp/embedded-signup", async (req, res) => {
+    const digits = (value: unknown) => String(value ?? "").replace(/\D/g, "");
+    const code = String(req.body?.code ?? "").trim();
+    const businessAccountId = digits(req.body?.businessAccountId);
+    const phoneNumberId = digits(req.body?.phoneNumberId);
+    if (!code || !businessAccountId || !phoneNumberId) {
+      return void res.status(400).json({ error: "Meta did not finish the connection (no code, account or number). Please try again." });
+    }
+    const result = await completeEmbeddedSignup(config.whatsapp, { code, businessAccountId, phoneNumberId });
+    if ("error" in result) {
+      db.addAlert(`WhatsApp connection failed: ${result.error}`);
+      return void res.status(400).json({ error: result.error });
+    }
+    db.saveWhatsAppConnection({ ...result, connectedAt: db.now().toISOString() });
+    useConnection(config.whatsapp, result);
+    db.addAlert(`WhatsApp ${result.phone ?? result.phoneNumberId} is connected. Your phone keeps working; the agents now answer customers on this number.`);
+    res.json({ ok: true, phone: result.phone });
   });
 
   // Backup: settings, suppliers and customers as one file to keep; restore it after a reset or on a new server.

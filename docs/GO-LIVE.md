@@ -78,3 +78,19 @@ All three must be yes. Note their monthly fee, if any.
   person's last message. Approval by Meta can take a day; the README has the wording.
 - **Zoho**: when you want live stock and estimates in Zoho, the Connections card lists the keys.
 - Open the WhatsApp Business app **at least every 14 days**, or Meta disconnects the number from the agents.
+
+## Your main number, keeping the phone (Coexistence)
+
+Meta lets a number stay in the WhatsApp Business app *and* be answered by the agents only through its
+Embedded Signup ("Coexistence"), which needs the Meta app to be an approved Tech Provider.
+
+1. Business verification (Business settings → Security centre) must show **Verified**.
+2. In the Meta app, become a Tech Provider and pass App Review for `whatsapp_business_messaging` and
+   `whatsapp_business_management`.
+3. Facebook Login for Business → Configurations → create a configuration for WhatsApp Embedded Signup.
+4. In Render set `WHATSAPP_APP_ID` (App settings → Basic) and `WHATSAPP_SIGNUP_CONFIG_ID` (the configuration ID).
+5. Back up the chats on the phone. Then dashboard → Settings → Connections → **Connect WhatsApp (keep my phone)**:
+   choose the business, enter the number, choose to connect the existing WhatsApp Business app and scan the QR code.
+
+The app never registers the number (that would move it off the phone). Never use "Register", "Migrate" or
+"Delete" on the main number in WhatsApp Manager. To disconnect, remove the link from the WhatsApp Business app.
