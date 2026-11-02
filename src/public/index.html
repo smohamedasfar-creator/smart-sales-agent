@@ -67,6 +67,8 @@
   <section id="approvals"></section>
 
   <section id="enquiries" hidden>
+    <div class="card row"><strong>All enquiries</strong> <a class="primary" href="/api/report.xlsx" download style="text-decoration:none;padding:8px 14px;border-radius:8px;background:var(--accent);color:var(--accent-text)">Download Excel</a>
+      <span class="muted">Every enquiry with its status, the items asked for, and the orders by brand.</span></div>
     <div class="card scroll"><table id="enquiry-table"></table></div>
     <div id="enquiry-detail"></div>
   </section>
@@ -186,7 +188,7 @@
     <div class="card">
       <div class="row"><strong>Orders by brand</strong>
         <select id="order-brand" style="width:auto"><option value="">All brands</option></select>
-        <span class="muted">A customer's "yes" becomes one order per brand.</span></div>
+        <span class="muted">A customer's "yes" becomes one order per brand.</span> <a class="primary" href="/api/report.xlsx" download style="text-decoration:none;padding:8px 14px;border-radius:8px;background:var(--accent);color:var(--accent-text)">Download Excel</a></div>
     </div>
     <div class="card scroll"><table id="order-table"></table></div>
   </section>

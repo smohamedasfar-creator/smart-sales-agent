@@ -583,6 +583,13 @@ export class Db {
     );
   }
 
+  /** Every enquiry with its customer, newest first: for the Excel report. */
+  allEnquiries(): (Enquiry & Pick<Customer, "phone" | "name" | "company" | "emirate" | "trn" | "level">)[] {
+    return this.all(
+      "SELECT e.*, c.phone, c.name, c.company, c.emirate, c.trn, c.level FROM enquiries e JOIN customers c ON c.id = e.customer_id ORDER BY e.id DESC",
+    );
+  }
+
   nextQuoteNumber(): string {
     const row = this.get<{ n: number }>("SELECT COUNT(*) AS n FROM enquiries WHERE quote_ref IS NOT NULL");
     return `Q-${String((row?.n ?? 0) + 1).padStart(5, "0")}`;
