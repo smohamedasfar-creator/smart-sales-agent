@@ -7,6 +7,7 @@ import type { Coordinator } from "./agents/coordinator.js";
 import { checkWhatsApp, linkWhatsAppAccount, parseOwnerReplies, parseWebhook, verifySignature } from "./channels/whatsapp.js";
 import type { Config } from "./config.js";
 import { createBackup, restoreBackup } from "./backup.js";
+import { createReport } from "./report.js";
 import { readExcelCatalog } from "./catalog/excel.js";
 import { privacyPage } from "./privacy.js";
 import type { CustomerDetails, Settings } from "./db.js";
@@ -166,6 +167,13 @@ export function createApp(coordinator: Coordinator, config: AppConfig) {
     const day = db.now().toISOString().slice(0, 10);
     res.set("Content-Disposition", `attachment; filename="smart-sales-agent-backup-${day}.json"`);
     res.type("application/json").send(JSON.stringify(createBackup(db), null, 2));
+  });
+
+  // Excel report: every enquiry with its status, the items asked for, and the orders by brand.
+  app.get("/api/report.xlsx", async (_req, res) => {
+    const day = db.now().toISOString().slice(0, 10);
+    res.set("Content-Disposition", `attachment; filename="enquiries-and-orders-${day}.xlsx"`);
+    res.type("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet").send(await createReport(db));
   });
 
   app.post("/api/restore", express.json({ limit: "10mb" }), (req, res) => {

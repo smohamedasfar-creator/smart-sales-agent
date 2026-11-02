@@ -168,6 +168,42 @@ describe("dashboard", () => {
     expect(existsSync(path)).toBe(true);
   });
 
+  it("downloads every enquiry with its status, the items and the orders by brand as Excel", async () => {
+    const auth = { Authorization: `Basic ${Buffer.from("owner:pw").toString("base64")}` };
+    const { t, base } = await start();
+    const ali = t.db.upsertCustomer("971501111111", "Ali");
+    t.db.updateCustomer(ali.id, { company: "Gulf Star", emirate: "Sharjah" });
+    const won = t.db.createEnquiry(ali.id);
+    t.db.replaceItems(won.id, [{ description: "24 port switch", quantity: 2, unit: null }]);
+    const [item] = t.db.items(won.id);
+    t.db.updateItem(item.id, { matched_name: "OPTERNA 24P Switch", brand: "OPTERNA", source: "stock", unit_price: 500 });
+    t.db.setStatus(won.id, "won");
+    t.db.addOrder({ enquiry_id: won.id, customer_id: ali.id, quote_ref: "Q-00001", brand: "OPTERNA", subtotal: 1000, lines: [{ name: "OPTERNA 24P Switch", quantity: 2 }] });
+    const sara = t.db.upsertCustomer("971502222222", "Sara");
+    t.db.createEnquiry(sara.id);
+
+    const response = await fetch(`${base}/api/report.xlsx`, { headers: auth });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-disposition")).toContain("enquiries-and-orders-");
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(await response.arrayBuffer());
+    expect(workbook.worksheets.map((w) => w.name)).toEqual(["Enquiries", "Items", "Orders", "Orders OPTERNA"]);
+
+    const enquiries = workbook.getWorksheet("Enquiries")!;
+    expect(enquiries.rowCount).toBe(3);
+    const rows = [2, 3].map((n) => enquiries.getRow(n));
+    const aliRow = rows.find((r) => r.getCell(4).value === "Ali")!;
+    expect(aliRow.getCell(5).value).toBe("Gulf Star");
+    expect(aliRow.getCell(11).value).toBe("2 x OPTERNA 24P Switch");
+    expect(aliRow.getCell(12).value).toBe("7. Order won");
+    expect(rows.find((r) => r.getCell(4).value === "Sara")!.getCell(12).value).toContain("Gathering");
+
+    expect(workbook.getWorksheet("Items")!.getRow(2).getCell(14).value).toBe(1000);
+    const brand = workbook.getWorksheet("Orders OPTERNA")!;
+    expect(brand.getRow(2).getCell(1).value).toMatch(/^SO-/);
+    expect(brand.getRow(3).getCell(10).value).toBe(1000);
+  });
+
   it("downloads a backup and restores it on a fresh app", async () => {
     const auth = { Authorization: `Basic ${Buffer.from("owner:pw").toString("base64")}` };
     const first = await start();
