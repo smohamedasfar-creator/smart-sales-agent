@@ -561,6 +561,7 @@ window.addEventListener("message", (event) => {
   else if (data.event === "FINISH") signupResult = { ok: false, reason: "This was not connected as \"keep my phone\" (Coexistence). Nothing was changed. Try again and enter the number that is in your WhatsApp Business app." };
   else if (data.event === "CANCEL") signupResult = { ok: false, reason: "Cancelled. Nothing was changed." };
   else if (data.event === "ERROR") signupResult = { ok: false, reason: `Meta: ${data.data?.error_message || "error"}. Nothing was changed.` };
+  else if (data.event) signupResult = { ok: false, reason: `Meta finished with "${data.event}", which is not the "keep my phone" result. Nothing was changed in the app. Send a screenshot of this message.` };
 });
 function loadFacebook(appId, version) {
   if (window.FB) return Promise.resolve();
@@ -578,7 +579,8 @@ async function connectWhatsApp() {
   const ok = confirm("Connect your WhatsApp number to the agents?\n\n" +
     "• In the Facebook window, choose your business and enter your number.\n" +
     "• When asked, choose to connect your existing WhatsApp Business app and scan the QR code with that app.\n" +
-    "• Do NOT choose to move or register the number: your phone must keep working.\n\n" +
+    "• Do NOT choose to move or register the number: your phone must keep working.\n" +
+    "• If Facebook asks to verify the number by SMS or phone call, CLOSE the window: that is the wrong path.\n\n" +
     "Back up your chats on the phone first.");
   if (!ok) return;
   const out = $("wa-signup");
@@ -592,7 +594,9 @@ async function connectWhatsApp() {
     config_id: config.configId,
     response_type: "code",
     override_default_response_type: true,
-    extras: { setup: {}, featureType: "whatsapp_business_app_onboarding", sessionInfoVersion: "3" },
+    // version v4 is the current Embedded Signup flow (as in Meta's sample code); without it Meta opens the
+    // older flow that only offers a new number verified by SMS.
+    extras: { version: "v4", setup: {}, featureType: "whatsapp_business_app_onboarding", sessionInfoVersion: "3" },
   });
 }
 async function finishSignup(response, out) {
