@@ -239,6 +239,52 @@ describe("enquiry to order", () => {
     expect(t.db.recentMessages(1)).toHaveLength(0);
   });
 
+  it("alerts the owner about a personal-looking message only once a day per person", async () => {
+    const t = setup();
+    t.llm.handlers.coordinator = () => ({ intent: "personal" });
+    await t.coordinator.onWhatsApp(fromCustomer("Bro, happy birthday!"));
+    await t.coordinator.onWhatsApp({ ...fromCustomer("See you Friday"), id: "wamid.p2" });
+    const toOwner = t.whatsapp.sent.filter((m) => m.to === OWNER);
+    expect(toOwner).toHaveLength(1);
+    expect(toOwner[0].body).toContain(`reply PERSONAL ${CUSTOMER}`);
+  });
+
+  it("lets the owner add a personal contact by WhatsApp: PERSONAL and the number", async () => {
+    const t = setup();
+    await t.coordinator.onWhatsApp({ id: "wamid.o20", from: OWNER, name: "Owner", text: "PERSONAL 0501111111 Ali cousin" });
+    expect(t.db.getSettings().personalContacts).toEqual([{ phone: "971501111111", name: "Ali cousin" }]);
+    expect(t.whatsapp.sent.at(-1)).toMatchObject({ to: OWNER });
+    expect(t.whatsapp.sent.at(-1)!.body).toContain("Added +971501111111");
+    // Not an approval command: nothing else happens.
+    expect(t.llm.calls).toHaveLength(0);
+
+    await t.coordinator.onWhatsApp({ ...fromCustomer("Dinner tonight?"), id: "wamid.p3" });
+    expect(t.whatsapp.sent.filter((m) => m.to === CUSTOMER)).toHaveLength(0);
+
+    await t.coordinator.onWhatsApp({ id: "wamid.o21", from: OWNER, name: "Owner", text: "personal" });
+    expect(t.whatsapp.sent.at(-1)!.body).toContain("PERSONAL 0501234567");
+  });
+
+  it("marking a customer as personal closes their enquiries and takes them off the list and report", async () => {
+    const t = setup();
+    const customer = t.db.upsertCustomer(CUSTOMER, "Ali");
+    const enquiry = t.db.createEnquiry(customer.id);
+    t.db.addDraft({ enquiry_id: enquiry.id, kind: "quote", to_phone: CUSTOMER, body: "Quote" });
+    const other = t.db.upsertCustomer("971502222222", "Sara");
+    t.db.createEnquiry(other.id);
+    expect(t.db.listEnquiries()).toHaveLength(2);
+
+    t.db.markPersonal(CUSTOMER, "Ali (brother)");
+    expect(t.db.getSettings().personalContacts).toEqual([{ phone: CUSTOMER, name: "Ali (brother)" }]);
+    expect(t.db.getEnquiry(enquiry.id)!.status).toBe("lost");
+    expect(t.db.pendingDrafts()).toHaveLength(0);
+    expect(t.db.listEnquiries().map((e) => e.phone)).toEqual(["971502222222"]);
+    expect(t.db.allEnquiries().map((e) => e.phone)).toEqual(["971502222222"]);
+    // Marking twice doesn't add them twice.
+    t.db.markPersonal(CUSTOMER, "Ali");
+    expect(t.db.getSettings().personalContacts).toHaveLength(1);
+  });
+
   it("steps back from a chat when the owner replies from the WhatsApp Business app", async () => {
     const t = setup();
     t.llm.handlers.coordinator = () => ({ intent: "question" });

@@ -123,6 +123,19 @@ export class Coordinator {
   private async onOwnerMessage(text: string): Promise<void> {
     const { db } = this.ctx;
     const answer = text.trim().toLowerCase();
+    // "PERSONAL 0501234567": add family or a friend to the personal contacts from the phone.
+    const personal = /^personal\b[\s:,-]*(\+?[\d\s-]{7,})?\s*(.*)$/i.exec(text.trim());
+    if (personal) {
+      const number = (personal[1] ?? "").replace(/\D/g, "");
+      if (!number) {
+        await this.notifyOwner("To add a personal contact, send PERSONAL and the number, e.g. PERSONAL 0501234567 Ahmed.");
+        return;
+      }
+      const full = number.startsWith("0") ? `971${number.slice(1)}` : number;
+      db.markPersonal(full, personal[2]?.trim() ?? "");
+      await this.notifyOwner(`Added +${full} to your personal contacts: the agents will never reply to them.`);
+      return;
+    }
     const yes = /^(ok|okay|yes|approve|approved|send|send it)\b/.test(answer);
     const no = /^(no|reject|stop|hold)\b/.test(answer);
     if (!yes && !no) {
@@ -213,10 +226,15 @@ export class Coordinator {
       this.step(customer, enquiry?.id ?? null, "Coordinator", `Read the customer's message: ${INTENT_LABEL[intent]}.`);
 
       if (intent === "personal") {
-        // Looks like family or a friend: stay quiet and let the owner decide.
-        await this.notifyOwner(
-          `${customer.name ?? customer.phone} sent a message that looks personal, so the agents didn't reply. If they are family or a friend, add +${customer.phone} to your personal contacts in Settings.`,
-        );
+        // Looks like family or a friend: stay quiet and let the owner decide (one alert a day per person).
+        const marker = `+${customer.phone} sent a message that looks personal`;
+        const dayAgo = db.now().getTime() - 24 * 3600_000;
+        const alerted = db.alerts().some((a) => a.text.includes(marker) && new Date(a.created_at).getTime() > dayAgo);
+        if (!alerted) {
+          await this.notifyOwner(
+            `${customer.name ? `${customer.name} ` : ""}${marker}, so the agents didn't reply. If they are family or a friend, reply PERSONAL ${customer.phone} to add them, or use "Mark as personal contact" in Enquiries.`,
+          );
+        }
         return;
       }
 

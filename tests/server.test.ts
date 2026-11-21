@@ -180,6 +180,18 @@ describe("dashboard", () => {
     expect(existsSync(path)).toBe(true);
   });
 
+  it("marks a customer as a personal contact from the dashboard", async () => {
+    const auth = { Authorization: `Basic ${Buffer.from("owner:pw").toString("base64")}`, "Content-Type": "application/json" };
+    const { t, base } = await start();
+    const customer = t.db.upsertCustomer("971501111111", "Ali");
+    t.db.createEnquiry(customer.id);
+    const response = await fetch(`${base}/api/customers/${customer.id}/personal`, { method: "POST", headers: auth, body: JSON.stringify({ name: "Ali (brother)" }) });
+    expect(await response.json()).toEqual({ ok: true });
+    expect(t.db.getSettings().personalContacts).toEqual([{ phone: "971501111111", name: "Ali (brother)" }]);
+    expect(await (await fetch(`${base}/api/enquiries`, { headers: auth })).json()).toEqual([]);
+    expect((await fetch(`${base}/api/customers/999/personal`, { method: "POST", headers: auth })).status).toBe(404);
+  });
+
   it("downloads every enquiry with its status, the items and the orders by brand as Excel", async () => {
     const auth = { Authorization: `Basic ${Buffer.from("owner:pw").toString("base64")}` };
     const { t, base } = await start();

@@ -256,6 +256,14 @@ export function createApp(coordinator: Coordinator, config: AppConfig) {
   });
 
   // A customer's level, kind (end customer or reseller) and details, set by the owner.
+  // "Mark as personal contact" on an enquiry: family or friends are taken out of sales for good.
+  app.post("/api/customers/:id/personal", (req, res) => {
+    const customer = db.getCustomer(Number(req.params.id));
+    if (!customer) return void res.sendStatus(404);
+    db.markPersonal(customer.phone, String(req.body?.name ?? customer.name ?? ""));
+    res.json({ ok: true });
+  });
+
   app.put("/api/customers/:id", (req, res) => {
     const body = req.body ?? {};
     const changes: CustomerDetails = {};
