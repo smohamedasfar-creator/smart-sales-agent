@@ -311,7 +311,8 @@ async function showEnquiry(id, quiet) {
           <option value="customer" ${d.customer.type !== "reseller" ? "selected" : ""}>End customer (customer price)</option>
           <option value="reseller" ${d.customer.type === "reseller" ? "selected" : ""}>Reseller (reseller price)</option></select></div>
       </div>
-      <p><button class="secondary" onclick="saveCustomer(${Number(d.customer.id)}, ${Number(d.enquiry.id)})">Save customer</button> <span id="c-saved" class="muted"></span></p>
+      <p><button class="secondary" onclick="saveCustomer(${Number(d.customer.id)}, ${Number(d.enquiry.id)})">Save customer</button> <span id="c-saved" class="muted"></span>
+        <button class="secondary danger" style="float:right" onclick="markPersonal(${Number(d.customer.id)})">Mark as personal contact</button></p>
       <label>Chat</label>
       <div class="chat">${d.messages.map((m) => `<div class="bubble ${m.direction}">${esc(m.body)}<div class="muted">${new Date(m.created_at).toLocaleString()}</div></div>`).join("")}</div>
       <div class="row" style="margin-top:8px"><input id="manual-text" placeholder="Type a message to the customer" style="flex:1"><button class="primary" onclick="sendManual(${d.enquiry.id})">Send</button></div>
@@ -353,6 +354,12 @@ async function saveCustomer(id, enquiryId) {
   if ($("c-level").value) body.level = Number($("c-level").value);
   await api(`/customers/${id}`, { method: "PUT", body });
   $("c-saved").textContent = "Saved. A quote waiting for approval keeps its prices; a new quote uses these.";
+}
+async function markPersonal(id) {
+  if (!confirm("Is this family, a friend or someone you know personally?\n\nThe agents will never reply to this number again, and this chat leaves the enquiry list. You can undo it in Settings → Personal contacts.")) return;
+  await api(`/customers/${id}/personal`, { method: "POST", body: { name: $("c-name").value } });
+  $("enquiry-detail").innerHTML = "";
+  loadEnquiries();
 }
 async function resume(id) { await api(`/enquiries/${id}/resume`, { method: "POST" }); showEnquiry(id); loadEnquiries(); }
 async function sendManual(id) {

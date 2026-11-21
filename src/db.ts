@@ -600,18 +600,46 @@ export class Db {
     return this.all<Enquiry>("SELECT * FROM enquiries WHERE status = ? ORDER BY id", status);
   }
 
+  /** Whether this number is in the owner's personal contacts (family, friends): never a customer. */
+  isPersonal(phone: string): boolean {
+    return this.getSettings().personalContacts.some((c) => samePhone(c.phone, phone));
+  }
+
+  /**
+   * Marks a number as a personal contact: adds it to the list, closes its enquiries and cancels anything
+   * waiting to be sent to it, and takes it off the enquiry list and the Excel report.
+   */
+  markPersonal(phone: string, name: string): void {
+    const digits = phone.replace(/\D/g, "");
+    const settings = this.getSettings();
+    if (!settings.personalContacts.some((c) => samePhone(c.phone, digits))) {
+      settings.personalContacts.push({ phone: digits, name: name.trim() });
+      this.saveSettings(settings);
+    }
+    for (const customer of this.all<Customer>("SELECT * FROM customers")) {
+      if (!samePhone(customer.phone, digits)) continue;
+      for (const enquiry of this.all<Enquiry>("SELECT * FROM enquiries WHERE customer_id = ?", customer.id)) {
+        for (const draft of this.pendingDrafts()) if (draft.enquiry_id === enquiry.id) this.setDraft(draft.id, "rejected");
+        if (OPEN_STATUSES.includes(enquiry.status)) this.setStatus(enquiry.id, "lost", "Personal contact");
+      }
+    }
+    this.forgetCustomer(digits);
+  }
+
   listEnquiries(limit = 100): (Enquiry & { phone: string; name: string | null })[] {
-    return this.all(
+    const rows = this.all<Enquiry & { phone: string; name: string | null }>(
       "SELECT e.*, c.phone, c.name FROM enquiries e JOIN customers c ON c.id = e.customer_id ORDER BY e.updated_at DESC LIMIT ?",
       limit,
     );
+    return rows.filter((e) => !this.isPersonal(e.phone));
   }
 
   /** Every enquiry with its customer, newest first: for the Excel report. */
   allEnquiries(): (Enquiry & Pick<Customer, "phone" | "name" | "company" | "emirate" | "trn" | "level">)[] {
-    return this.all(
+    const rows = this.all<Enquiry & Pick<Customer, "phone" | "name" | "company" | "emirate" | "trn" | "level">>(
       "SELECT e.*, c.phone, c.name, c.company, c.emirate, c.trn, c.level FROM enquiries e JOIN customers c ON c.id = e.customer_id ORDER BY e.id DESC",
     );
+    return rows.filter((e) => !this.isPersonal(e.phone));
   }
 
   nextQuoteNumber(): string {
